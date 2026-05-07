@@ -18,6 +18,8 @@ Composite action: assume an AWS IAM role via GitHub OIDC, log in to Amazon ECR, 
 | `context` | no | `.` | Docker build context. |
 | `dockerfile` | no | `./Dockerfile` | Path to the Dockerfile. |
 | `build-args` | no | `""` | Newline-separated list of build args (`KEY=VALUE`). |
+| `cache-from` | no | `type=gha` | Build cache source(s) for Buildx (`--cache-from`). |
+| `cache-to` | no | `type=gha,mode=min` | Build cache destination(s) for Buildx (`--cache-to`). Use `mode=max` for full multi-stage caching, or `type=registry,ref=<ecr>/<repo>:buildcache` for ECR-backed cache. Set to `""` to disable cache export. |
 
 ## Outputs
 

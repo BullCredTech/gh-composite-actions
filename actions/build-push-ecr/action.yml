@@ -38,6 +38,20 @@ inputs:
     description: Newline-separated list of build args (KEY=VALUE).
     required: false
     default: ""
+  cache-from:
+    description: |
+      Build cache source(s) for `docker buildx build --cache-from`. Defaults to GHA cache.
+      Override with e.g. `type=registry,ref=<ecr>/<repo>:buildcache` for registry-based cache.
+    required: false
+    default: "type=gha"
+  cache-to:
+    description: |
+      Build cache destination(s) for `docker buildx build --cache-to`. Defaults to GHA cache
+      with `mode=min` (only final-stage layers exported — much faster than `mode=max`).
+      Set to empty string to disable cache export entirely. For multi-stage caching pass
+      `type=gha,mode=max` or `type=registry,ref=<ecr>/<repo>:buildcache,mode=max`.
+    required: false
+    default: "type=gha,mode=min"
 
 outputs:
   image-uri:
@@ -86,8 +100,8 @@ runs:
         provenance: false
         tags: ${{ steps.tags.outputs.tags }}
         build-args: ${{ inputs.build-args }}
-        cache-from: type=gha
-        cache-to: type=gha,mode=max
+        cache-from: ${{ inputs.cache-from }}
+        cache-to: ${{ inputs.cache-to }}
 
     - name: Export image URI
       id: image
