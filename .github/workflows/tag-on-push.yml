@@ -1,0 +1,26 @@
+# Create a semantic version tag on every push to main, based on conventional commits.
+# Commits since the last tag are analyzed: fix: → patch, feat: → minor, BREAKING CHANGE / feat!: → major.
+name: Tag on push to main
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write  # required to create tag and GitHub release
+
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # full history for conventional commit analysis
+
+      - name: Semantic version and tag
+        id: semver
+        uses: grumpy-programmer/conventional-commits-semver-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
