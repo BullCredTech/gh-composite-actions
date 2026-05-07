@@ -50,6 +50,23 @@ inputs:
     description: Whether to pass --create-namespace to helm upgrade.
     required: false
     default: "true"
+  atomic:
+    description: |
+      Whether to pass --atomic to helm upgrade. When true (default), a failed install
+      is rolled back/uninstalled automatically. Set to false during first-install debugging
+      so failed resources stay around for inspection.
+    required: false
+    default: "true"
+  wait:
+    description: Whether to pass --wait to helm upgrade (always true when atomic=true).
+    required: false
+    default: "true"
+  diagnostics-on-failure:
+    description: |
+      When true (default), on failure dumps namespace events, helm history, pod statuses,
+      and recent pod logs to the workflow log to make debugging deploys easier.
+    required: false
+    default: "true"
 
 runs:
   using: composite
@@ -86,6 +103,8 @@ runs:
       env:
         EXTRA_SET: ${{ inputs.extra-set }}
         CREATE_NS: ${{ inputs.create-namespace }}
+        ATOMIC: ${{ inputs.atomic }}
+        WAIT: ${{ inputs.wait }}
       run: |
         set -euo pipefail
         cmd=(helm upgrade --install "${{ inputs.release }}" "${{ inputs.chart-path }}"
@@ -93,7 +112,12 @@ runs:
              -f "${{ inputs.values-file }}"
              --set image.repository="${{ inputs.image-repository }}"
              --set image.tag="${{ inputs.image-tag }}"
-             --atomic --timeout "${{ inputs.timeout }}")
+             --timeout "${{ inputs.timeout }}")
+        if [ "${ATOMIC}" = "true" ]; then
+          cmd+=(--atomic)
+        elif [ "${WAIT}" = "true" ]; then
+          cmd+=(--wait)
+        fi
         if [ "${CREATE_NS}" = "true" ]; then
           cmd+=(--create-namespace)
         fi
@@ -111,3 +135,49 @@ runs:
         kubectl -n "${{ inputs.namespace }}" rollout status \
           deploy/"${{ inputs.release }}" \
           --timeout="${{ inputs.timeout }}"
+
+    - name: Diagnostics on failure
+      if: ${{ failure() && inputs.diagnostics-on-failure == 'true' }}
+      shell: bash
+      env:
+        NS: ${{ inputs.namespace }}
+        REL: ${{ inputs.release }}
+      run: |
+        set +e
+        echo "::group::helm history"
+        helm history "$REL" -n "$NS" || true
+        echo "::endgroup::"
+
+        echo "::group::helm get values"
+        helm get values "$REL" -n "$NS" || true
+        echo "::endgroup::"
+
+        echo "::group::kubectl get all"
+        kubectl get all -n "$NS" -l app.kubernetes.io/instance="$REL" -o wide || \
+          kubectl get all -n "$NS" -o wide
+        echo "::endgroup::"
+
+        echo "::group::kubectl get externalsecret,secret,configmap"
+        kubectl get externalsecret,secret,configmap -n "$NS" || true
+        echo "::endgroup::"
+
+        echo "::group::kubectl describe deployment $REL"
+        kubectl describe deployment "$REL" -n "$NS" || true
+        echo "::endgroup::"
+
+        echo "::group::kubectl describe pods (release=$REL)"
+        kubectl describe pods -n "$NS" -l app.kubernetes.io/instance="$REL" || true
+        echo "::endgroup::"
+
+        echo "::group::recent pod logs (release=$REL)"
+        for pod in $(kubectl get pods -n "$NS" -l app.kubernetes.io/instance="$REL" -o name 2>/dev/null); do
+          echo "--- $pod (current) ---"
+          kubectl logs "$pod" -n "$NS" --tail=200 --all-containers || true
+          echo "--- $pod (previous) ---"
+          kubectl logs "$pod" -n "$NS" --previous --tail=200 --all-containers || true
+        done
+        echo "::endgroup::"
+
+        echo "::group::namespace events (last hour, sorted)"
+        kubectl get events -n "$NS" --sort-by=.lastTimestamp | tail -n 80 || true
+        echo "::endgroup::"

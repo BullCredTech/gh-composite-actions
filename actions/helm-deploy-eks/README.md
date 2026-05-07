@@ -24,6 +24,9 @@ Composite action: assume an AWS IAM role via GitHub OIDC, configure `kubectl` an
 | `timeout` | no | `5m` | Helm `--timeout` and `kubectl rollout status --timeout` value. |
 | `extra-set` | no | `""` | Newline-separated additional `--set key=value` pairs. |
 | `create-namespace` | no | `"true"` | Whether to pass `--create-namespace` to `helm upgrade`. |
+| `atomic` | no | `"true"` | Whether to pass `--atomic` (rollback on failure). Set to `"false"` for first-install debugging so failed resources stay around for inspection. |
+| `wait` | no | `"true"` | Whether to pass `--wait`. Always implied when `atomic=true`. |
+| `diagnostics-on-failure` | no | `"true"` | On failure, dumps `helm history`, `kubectl get/describe/logs`, and namespace events to the workflow log. |
 
 ## Required permissions
 
