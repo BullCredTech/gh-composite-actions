@@ -222,7 +222,7 @@ runs:
     - name: Build and push to ECR
       id: build
       if: ${{ inputs.skip-ecr-build != 'true' }}
-      uses: BullCredTech/gh-composite-actions/actions/build-push-ecr@vmain
+      uses: BullCredTech/gh-composite-actions/actions/build-push-ecr@main
       with:
         aws-region: ${{ inputs.aws-region }}
         aws-role-arn: ${{ inputs.aws-role-arn }}
