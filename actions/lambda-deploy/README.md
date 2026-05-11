@@ -1,6 +1,8 @@
-# deploy-lambda-code
+# lambda-deploy
 
 Composite action: **build** a Lambda deployment ZIP (**Python** or **Node.js**), **assume** an IAM role with GitHub **OIDC**, and run **`aws lambda update-function-code`**.
+
+Path: **`BullCredTech/gh-composite-actions/actions/lambda-deploy@<tag>`** (e.g. **`@v1.2.0`**).
 
 The action does **not** run `actions/checkout` — the calling workflow must check out the consuming repository first (same pattern as other actions in this collection).
 
@@ -75,7 +77,7 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v4
-      - uses: BullCredTech/gh-composite-actions/actions/deploy-lambda-code@v1
+      - uses: BullCredTech/gh-composite-actions/actions/lambda-deploy@v1.2.0
         with:
           aws-role-arn: arn:aws:iam::235527546773:role/GitHubActionsLambdaRole
           aws-region: us-east-1
@@ -88,7 +90,7 @@ jobs:
 ```yaml
 steps:
   - uses: actions/checkout@v4
-  - uses: BullCredTech/gh-composite-actions/actions/deploy-lambda-code@v1
+  - uses: BullCredTech/gh-composite-actions/actions/lambda-deploy@v1.2.0
     with:
       aws-role-arn: arn:aws:iam::235527546773:role/GitHubActionsLambdaRole
       function-name: bull-lambda-dataprev-retry-staging
@@ -102,7 +104,7 @@ Typical **`bull-lambda-trigger-proposal-status`**-style artifact:
 ```yaml
 steps:
   - uses: actions/checkout@v4
-  - uses: BullCredTech/gh-composite-actions/actions/deploy-lambda-code@v1
+  - uses: BullCredTech/gh-composite-actions/actions/lambda-deploy@v1.2.0
     with:
       aws-role-arn: arn:aws:iam::235527546773:role/GitHubActionsLambdaRole
       function-name: bull-trigger-proposal-status-staging
