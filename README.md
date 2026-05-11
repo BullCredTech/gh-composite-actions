@@ -8,6 +8,7 @@ Centralized GitHub Actions composite actions shared across BullCredTech service 
 |--------|------|-------------|
 | [`build-push-ecr`](./actions/build-push-ecr) | `actions/build-push-ecr` | Assume an AWS IAM role via OIDC and build/push a Docker image to Amazon ECR with Buildx + GHA cache. |
 | [`eks-deploy`](./actions/eks-deploy) | `actions/eks-deploy` | Build/push to ECR (optional; includes `<environment>-latest` floating tag) and Helm deploy to EKS with rollout wait; or Helm-only with `skip-ecr-build`. |
+| [`lambda-deploy`](./actions/lambda-deploy) | `actions/lambda-deploy` | Build a Lambda ZIP (**Python pip** under `lambda/` or **Node** `npm` + `dist/`), OIDC **`configure-aws-credentials`**, and **`aws lambda update-function-code`**. |
 
 ## Usage
 
