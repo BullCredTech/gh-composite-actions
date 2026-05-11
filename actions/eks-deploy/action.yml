@@ -217,10 +217,12 @@ runs:
           echo "EOF"
         } >> "$GITHUB_OUTPUT"
 
+    # Caller repo is the GH workspace; `uses: ./actions/...` would resolve there, not inside
+    # this repository (see GH docs). Reference the sibling action by owner/repo/ref instead.
     - name: Build and push to ECR
       id: build
       if: ${{ inputs.skip-ecr-build != 'true' }}
-      uses: ./actions/build-push-ecr
+      uses: BullCredTech/gh-composite-actions/actions/build-push-ecr@vmain
       with:
         aws-region: ${{ inputs.aws-region }}
         aws-role-arn: ${{ inputs.aws-role-arn }}

@@ -6,6 +6,8 @@ This replaces the former **`helm-deploy-eks`** action (renamed and extended). Fo
 
 **Reference:** `BullCredTech/gh-composite-actions/actions/eks-deploy@main` (or pin to a tag after release).
 
+**Note:** The ECR build invokes `build-push-ecr` via a fully qualified path (`BullCredTech/gh-composite-actions/actions/build-push-ecr@…`), not `./actions/...`, because GitHub resolves relative `uses:` paths against the **workflow caller’s repository**, not this action’s repository.
+
 The IAM role used for EKS must be allowed by an EKS Access Entry (or `aws-auth`) with RBAC on the target namespace.
 
 ## Inputs
