@@ -117,6 +117,12 @@ inputs:
     description: On failure, print Helm/kubectl diagnostics.
     required: false
     default: "true"
+  job-summary:
+    description: >-
+      After a successful rollout, append a Markdown summary to `$GITHUB_STEP_SUMMARY`
+      (image URI, `<environment>-latest` floating tag when building, cluster, namespace, release).
+    required: false
+    default: "true"
 
 outputs:
   image-uri:
@@ -316,6 +322,31 @@ runs:
         kubectl -n "${{ inputs.namespace }}" rollout status \
           deploy/"${{ inputs.release }}" \
           --timeout="${{ inputs.timeout }}"
+
+    - name: Write GitHub Actions job summary
+      if: ${{ success() && inputs.job-summary == 'true' }}
+      shell: bash
+      env:
+        IMAGE_URI: ${{ steps.image-uri-out.outputs.uri }}
+        ECR_REG: ${{ inputs.ecr-registry }}
+        ECR_REPO: ${{ inputs.ecr-repository }}
+        ENV_NAME: ${{ inputs.environment }}
+        SKIP_ECR: ${{ inputs.skip-ecr-build }}
+        CLUSTER: ${{ inputs.cluster-name }}
+        NS: ${{ inputs.namespace }}
+        REL: ${{ inputs.release }}
+      run: |
+        {
+          echo "### Build and deploy"
+          echo ""
+          echo "- Image: \`${IMAGE_URI}\`"
+          if [ "${SKIP_ECR}" != "true" ]; then
+            echo "- Floating ECR tag: \`${ECR_REG}/${ECR_REPO}:${ENV_NAME}-latest\`"
+          fi
+          echo "- Cluster: \`${CLUSTER}\`"
+          echo "- Namespace: \`${NS}\`"
+          echo "- Release: \`${REL}\`"
+        } >> "${GITHUB_STEP_SUMMARY}"
 
     - name: Diagnostics on failure
       if: ${{ failure() && inputs.diagnostics-on-failure == 'true' }}

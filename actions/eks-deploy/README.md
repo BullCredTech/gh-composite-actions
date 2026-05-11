@@ -55,6 +55,7 @@ The IAM role used for EKS must be allowed by an EKS Access Entry (or `aws-auth`)
 | `atomic` | no | `true` | `--atomic`. |
 | `wait` | no | `true` | `--wait` when not atomic. |
 | `diagnostics-on-failure` | no | `true` | Print diagnostics on failure. |
+| `job-summary` | no | `true` | After a successful rollout, append a Markdown block to **`$GITHUB_STEP_SUMMARY`** (image, floating `<environment>-latest` tag when building, cluster, namespace, release). |
 
 When **not** skipping ECR build, **`image.repository`** and **`image.tag`** are set from `ecr-registry` / `ecr-repository` and the resolved primary tag.
 
