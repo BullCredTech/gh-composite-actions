@@ -7,7 +7,7 @@ Centralized GitHub Actions composite actions shared across BullCredTech service 
 | Action | Path | Description |
 |--------|------|-------------|
 | [`build-push-ecr`](./actions/build-push-ecr) | `actions/build-push-ecr` | Assume an AWS IAM role via OIDC and build/push a Docker image to Amazon ECR with Buildx + GHA cache. |
-| [`helm-deploy-eks`](./actions/helm-deploy-eks) | `actions/helm-deploy-eks` | Assume an AWS IAM role via OIDC, configure `kubectl`/`helm`, and run `helm upgrade --install` with rollout wait. |
+| [`eks-deploy`](./actions/eks-deploy) | `actions/eks-deploy` | Build/push to ECR (optional; includes `<environment>-latest` floating tag) and Helm deploy to EKS with rollout wait; or Helm-only with `skip-ecr-build`. |
 
 ## Usage
 
@@ -27,7 +27,7 @@ permissions:
   id-token: write
 ```
 
-See each action's README for full input/output reference and examples.
+See each action's README for full input/output reference, examples, and **BullCredTech defaults** (shared-services ECR registry and `GitHubActionsECRRole` for ECR OIDC—override when using another account).
 
 ## Versioning
 

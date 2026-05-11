@@ -9,9 +9,10 @@ Composite action: assume an AWS IAM role via GitHub OIDC, log in to Amazon ECR, 
 | Input | Required | Default | Description |
 |-------|----------|---------|-------------|
 | `aws-region` | no | `us-east-1` | AWS region of the ECR registry. |
-| `aws-role-arn` | yes | - | IAM role ARN to assume via GitHub OIDC. |
+| `aws-role-arn` | no | `""` | IAM role ARN for OIDC. When set, used for ECR; when empty, `ecr-role-arn` is used. |
+| `ecr-role-arn` | no | `arn:aws:iam::240037736937:role/GitHubActionsECRRole` | Default BullCredTech ECR OIDC role when `aws-role-arn` is empty. |
 | `role-session-name` | no | `gha-build-push-ecr` | STS session name. |
-| `ecr-registry` | yes | - | ECR registry hostname (e.g. `123456789012.dkr.ecr.us-east-1.amazonaws.com`). |
+| `ecr-registry` | no | `240037736937.dkr.ecr.us-east-1.amazonaws.com` | ECR registry hostname. |
 | `ecr-repository` | yes | - | ECR repository name. |
 | `image-tag` | yes | - | Primary image tag (e.g. commit SHA). |
 | `extra-tags` | no | `""` | Newline-separated list of additional tags to push. |
@@ -50,3 +51,5 @@ permissions:
     extra-tags: |
       staging-latest
 ```
+
+Use a per-environment floating tag (for example `staging-latest`, `production-latest`) instead of a single `latest` shared across environments.

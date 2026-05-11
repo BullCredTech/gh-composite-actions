@@ -1,0 +1,362 @@
+name: EKS deploy
+description: Optionally build and push to ECR (floating tag `<environment>-latest`), then configure kubectl/helm and run helm upgrade --install with rollout wait.
+
+inputs:
+  skip-ecr-build:
+    description: When true, skip ECR build/push and deploy using `image-repository` + `image-tag` only (Helm-only / legacy split-job workflows).
+    required: false
+    default: "false"
+  environment:
+    description: Environment name; used for the ECR floating tag `<environment>-latest` when building.
+    required: false
+    default: staging
+  aws-region:
+    description: AWS region (ECR and EKS).
+    required: false
+    default: us-east-1
+  aws-role-arn:
+    description: Default IAM role for OIDC when `ecr-role-arn` / `eks-role-arn` are not set.
+    required: false
+    default: ""
+  ecr-role-arn:
+    description: OIDC role for ECR build/push (BullCredTech shared-services `GitHubActionsECRRole` by default). When `aws-role-arn` is set, it is used for the ECR step instead.
+    required: false
+    default: arn:aws:iam::240037736937:role/GitHubActionsECRRole
+  eks-role-arn:
+    description: IAM role for Helm/EKS. Falls back to `aws-role-arn`.
+    required: false
+    default: ""
+  ecr-role-session-name:
+    description: STS session name for the ECR step.
+    required: false
+    default: gha-eks-deploy-ecr
+  role-session-name:
+    description: STS session name for the EKS/Helm step.
+    required: false
+    default: gha-eks-deploy
+  ecr-registry:
+    description: ECR registry hostname (required when `skip-ecr-build` is false). BullCredTech default points at shared services ECR in `us-east-1`.
+    required: false
+    default: 240037736937.dkr.ecr.us-east-1.amazonaws.com
+  ecr-repository:
+    description: ECR repository name (required when `skip-ecr-build` is false).
+    required: false
+    default: ""
+  image-repository:
+    description: Container image repository without tag (required when `skip-ecr-build` is true). Ignored when building; repository is `ecr-registry/ecr-repository`.
+    required: false
+    default: ""
+  image-tag:
+    description: Primary image tag. When building, defaults to `GITHUB_SHA` if empty. When `skip-ecr-build` is true, must be set.
+    required: false
+    default: ""
+  extra-image-tags:
+    description: Extra ECR tags (newline-separated), in addition to `<environment>-latest`, when building.
+    required: false
+    default: ""
+  context:
+    description: Docker build context.
+    required: false
+    default: "."
+  dockerfile:
+    description: Path to the Dockerfile.
+    required: false
+    default: "./Dockerfile"
+  build-args:
+    description: Newline-separated Docker build args (KEY=VALUE).
+    required: false
+    default: ""
+  cache-from:
+    description: Buildx `--cache-from` (passed to build-push-ecr).
+    required: false
+    default: "type=gha"
+  cache-to:
+    description: Buildx `--cache-to` (passed to build-push-ecr).
+    required: false
+    default: "type=gha,mode=min"
+  cluster-name:
+    description: EKS cluster name.
+    required: true
+  namespace:
+    description: Kubernetes namespace.
+    required: true
+  release:
+    description: Helm release name.
+    required: true
+  chart-path:
+    description: Path to the Helm chart directory.
+    required: true
+  values-file:
+    description: Environment-specific Helm values file.
+    required: true
+  helm-version:
+    description: Helm CLI version.
+    required: false
+    default: v3.15.4
+  timeout:
+    description: Helm and rollout timeout (e.g. 5m).
+    required: false
+    default: 5m
+  extra-set:
+    description: Optional newline-separated `--set key=value` pairs for Helm.
+    required: false
+    default: ""
+  create-namespace:
+    description: Whether to pass `--create-namespace` to Helm.
+    required: false
+    default: "true"
+  atomic:
+    description: Whether to pass `--atomic` to Helm.
+    required: false
+    default: "true"
+  wait:
+    description: Whether to pass `--wait` to Helm when not atomic.
+    required: false
+    default: "true"
+  diagnostics-on-failure:
+    description: On failure, print Helm/kubectl diagnostics.
+    required: false
+    default: "true"
+
+outputs:
+  image-uri:
+    description: Fully-qualified image URI with the primary tag (built) or `image-repository:image-tag` when skipping ECR build.
+    value: ${{ steps.image-uri-out.outputs.uri }}
+
+runs:
+  using: composite
+  steps:
+    - name: Validate configuration
+      shell: bash
+      env:
+        SKIP_ECR: ${{ inputs.skip-ecr-build }}
+        ECR_REG: ${{ inputs.ecr-registry }}
+        ECR_REPO: ${{ inputs.ecr-repository }}
+        IMG_REPO: ${{ inputs.image-repository }}
+        ECR_ROLE_IN: ${{ inputs.ecr-role-arn }}
+        EKS_ROLE_IN: ${{ inputs.eks-role-arn }}
+        AWS_ROLE_IN: ${{ inputs.aws-role-arn }}
+      run: |
+        set -euo pipefail
+        if [ "$SKIP_ECR" != "true" ]; then
+          if [ -z "$ECR_REG" ] || [ -z "$ECR_REPO" ]; then
+            echo "::error::ecr-registry and ecr-repository are required when skip-ecr-build is false"
+            exit 1
+          fi
+          ecr_role="$AWS_ROLE_IN"
+          [ -z "$ecr_role" ] && ecr_role="$ECR_ROLE_IN"
+          if [ -z "$ecr_role" ]; then
+            echo "::error::aws-role-arn, ecr-role-arn (default), or both must yield an ECR OIDC role when building"
+            exit 1
+          fi
+        else
+          if [ -z "$IMG_REPO" ]; then
+            echo "::error::image-repository is required when skip-ecr-build is true"
+            exit 1
+          fi
+        fi
+        eks_role="$EKS_ROLE_IN"
+        [ -z "$eks_role" ] && eks_role="$AWS_ROLE_IN"
+        if [ -z "$eks_role" ]; then
+          echo "::error::eks-role-arn or aws-role-arn is required for EKS deploy"
+          exit 1
+        fi
+
+    - name: Resolve primary image tag
+      id: primary-tag
+      shell: bash
+      env:
+        SKIP_ECR: ${{ inputs.skip-ecr-build }}
+        TAG_IN: ${{ inputs.image-tag }}
+      run: |
+        set -euo pipefail
+        if [ "$SKIP_ECR" = "true" ]; then
+          if [ -z "$TAG_IN" ]; then
+            echo "::error::image-tag is required when skip-ecr-build is true"
+            exit 1
+          fi
+          echo "tag=$TAG_IN" >> "$GITHUB_OUTPUT"
+        else
+          tag="$TAG_IN"
+          if [ -z "$tag" ]; then
+            tag="${GITHUB_SHA}"
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+        fi
+
+    - name: Resolve image repository for Helm
+      id: helm-repo
+      shell: bash
+      env:
+        SKIP_ECR: ${{ inputs.skip-ecr-build }}
+        ECR_REG: ${{ inputs.ecr-registry }}
+        ECR_REPO: ${{ inputs.ecr-repository }}
+        IMG_REPO: ${{ inputs.image-repository }}
+      run: |
+        set -euo pipefail
+        if [ "$SKIP_ECR" = "true" ]; then
+          echo "repo=$IMG_REPO" >> "$GITHUB_OUTPUT"
+        else
+          echo "repo=${ECR_REG}/${ECR_REPO}" >> "$GITHUB_OUTPUT"
+        fi
+
+    - name: Compose ECR tags (environment-latest + optional extras)
+      id: ecr-tags
+      if: ${{ inputs.skip-ecr-build != 'true' }}
+      shell: bash
+      env:
+        FLOATING: ${{ inputs.environment }}-latest
+        EXTRA: ${{ inputs.extra-image-tags }}
+      run: |
+        {
+          echo "extra-tags<<EOF"
+          echo "$FLOATING"
+          if [ -n "$EXTRA" ]; then
+            echo "$EXTRA"
+          fi
+          echo "EOF"
+        } >> "$GITHUB_OUTPUT"
+
+    - name: Build and push to ECR
+      id: build
+      if: ${{ inputs.skip-ecr-build != 'true' }}
+      uses: ./actions/build-push-ecr
+      with:
+        aws-region: ${{ inputs.aws-region }}
+        aws-role-arn: ${{ inputs.aws-role-arn }}
+        ecr-role-arn: ${{ inputs.ecr-role-arn }}
+        role-session-name: ${{ inputs.ecr-role-session-name }}
+        ecr-registry: ${{ inputs.ecr-registry }}
+        ecr-repository: ${{ inputs.ecr-repository }}
+        image-tag: ${{ steps.primary-tag.outputs.tag }}
+        extra-tags: ${{ steps.ecr-tags.outputs.extra-tags }}
+        context: ${{ inputs.context }}
+        dockerfile: ${{ inputs.dockerfile }}
+        build-args: ${{ inputs.build-args }}
+        cache-from: ${{ inputs.cache-from }}
+        cache-to: ${{ inputs.cache-to }}
+
+    - name: Export image URI
+      id: image-uri-out
+      shell: bash
+      env:
+        SKIP_ECR: ${{ inputs.skip-ecr-build }}
+        REPO: ${{ steps.helm-repo.outputs.repo }}
+        TAG: ${{ steps.primary-tag.outputs.tag }}
+      run: |
+        if [ "$SKIP_ECR" = "true" ]; then
+          echo "uri=${REPO}:${TAG}" >> "$GITHUB_OUTPUT"
+        else
+          echo "uri=${{ steps.build.outputs.image-uri }}" >> "$GITHUB_OUTPUT"
+        fi
+
+    - name: Configure AWS credentials (OIDC) for EKS
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        role-to-assume: ${{ inputs.eks-role-arn != '' && inputs.eks-role-arn || inputs.aws-role-arn }}
+        role-session-name: ${{ inputs.role-session-name }}
+        aws-region: ${{ inputs.aws-region }}
+
+    - name: Setup kubectl
+      uses: azure/setup-kubectl@v4
+
+    - name: Setup helm
+      uses: azure/setup-helm@v4
+      with:
+        version: ${{ inputs.helm-version }}
+
+    - name: Update kubeconfig
+      shell: bash
+      run: |
+        aws eks update-kubeconfig \
+          --name "${{ inputs.cluster-name }}" \
+          --region "${{ inputs.aws-region }}"
+
+    - name: Helm lint
+      shell: bash
+      run: |
+        helm lint "${{ inputs.chart-path }}" -f "${{ inputs.values-file }}"
+
+    - name: Helm upgrade --install
+      shell: bash
+      env:
+        EXTRA_SET: ${{ inputs.extra-set }}
+        CREATE_NS: ${{ inputs.create-namespace }}
+        ATOMIC: ${{ inputs.atomic }}
+        WAIT: ${{ inputs.wait }}
+      run: |
+        set -euo pipefail
+        cmd=(helm upgrade --install "${{ inputs.release }}" "${{ inputs.chart-path }}"
+             --namespace "${{ inputs.namespace }}"
+             -f "${{ inputs.values-file }}"
+             --set image.repository="${{ steps.helm-repo.outputs.repo }}"
+             --set image.tag="${{ steps.primary-tag.outputs.tag }}"
+             --timeout "${{ inputs.timeout }}")
+        if [ "${ATOMIC}" = "true" ]; then
+          cmd+=(--atomic)
+        elif [ "${WAIT}" = "true" ]; then
+          cmd+=(--wait)
+        fi
+        if [ "${CREATE_NS}" = "true" ]; then
+          cmd+=(--create-namespace)
+        fi
+        if [ -n "${EXTRA_SET}" ]; then
+          while IFS= read -r kv; do
+            [ -z "$kv" ] && continue
+            cmd+=(--set "$kv")
+          done <<< "${EXTRA_SET}"
+        fi
+        "${cmd[@]}"
+
+    - name: Wait for rollout
+      shell: bash
+      run: |
+        kubectl -n "${{ inputs.namespace }}" rollout status \
+          deploy/"${{ inputs.release }}" \
+          --timeout="${{ inputs.timeout }}"
+
+    - name: Diagnostics on failure
+      if: ${{ failure() && inputs.diagnostics-on-failure == 'true' }}
+      shell: bash
+      env:
+        NS: ${{ inputs.namespace }}
+        REL: ${{ inputs.release }}
+      run: |
+        set +e
+        echo "::group::helm history"
+        helm history "$REL" -n "$NS" || true
+        echo "::endgroup::"
+
+        echo "::group::helm get values"
+        helm get values "$REL" -n "$NS" || true
+        echo "::endgroup::"
+
+        echo "::group::kubectl get all"
+        kubectl get all -n "$NS" -l app.kubernetes.io/instance="$REL" -o wide || \
+          kubectl get all -n "$NS" -o wide
+        echo "::endgroup::"
+
+        echo "::group::kubectl get externalsecret,secret,configmap"
+        kubectl get externalsecret,secret,configmap -n "$NS" || true
+        echo "::endgroup::"
+
+        echo "::group::describe deployment $REL"
+        kubectl describe deployment "$REL" -n "$NS" || true
+        echo "::endgroup::"
+
+        echo "::group::kubectl describe pods (release=$REL)"
+        kubectl describe pods -n "$NS" -l app.kubernetes.io/instance="$REL" || true
+        echo "::endgroup::"
+
+        echo "::group::recent pod logs (release=$REL)"
+        for pod in $(kubectl get pods -n "$NS" -l app.kubernetes.io/instance="$REL" -o name 2>/dev/null); do
+          echo "--- $pod (current) ---"
+          kubectl logs "$pod" -n "$NS" --tail=200 --all-containers || true
+          echo "--- $pod (previous) ---"
+          kubectl logs "$pod" -n "$NS" --previous --tail=200 --all-containers || true
+        done
+        echo "::endgroup::"
+
+        echo "::group::namespace events (sorted)"
+        kubectl get events -n "$NS" --sort-by=.lastTimestamp | tail -n 80 || true
+        echo "::endgroup::"

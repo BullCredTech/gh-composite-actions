@@ -7,15 +7,21 @@ inputs:
     required: false
     default: us-east-1
   aws-role-arn:
-    description: IAM role ARN to assume via GitHub OIDC.
-    required: true
+    description: IAM role ARN to assume via GitHub OIDC. When empty, `ecr-role-arn` is used.
+    required: false
+    default: ""
+  ecr-role-arn:
+    description: Default ECR OIDC role when `aws-role-arn` is empty (BullCredTech shared services account).
+    required: false
+    default: arn:aws:iam::240037736937:role/GitHubActionsECRRole
   role-session-name:
     description: STS session name.
     required: false
     default: gha-build-push-ecr
   ecr-registry:
     description: ECR registry hostname (e.g. 123456789012.dkr.ecr.us-east-1.amazonaws.com).
-    required: true
+    required: false
+    default: 240037736937.dkr.ecr.us-east-1.amazonaws.com
   ecr-repository:
     description: ECR repository name.
     required: true
@@ -64,7 +70,7 @@ runs:
     - name: Configure AWS credentials (OIDC)
       uses: aws-actions/configure-aws-credentials@v4
       with:
-        role-to-assume: ${{ inputs.aws-role-arn }}
+        role-to-assume: ${{ inputs.aws-role-arn != '' && inputs.aws-role-arn || inputs.ecr-role-arn }}
         role-session-name: ${{ inputs.role-session-name }}
         aws-region: ${{ inputs.aws-region }}
 
