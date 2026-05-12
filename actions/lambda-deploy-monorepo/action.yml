@@ -1,0 +1,191 @@
+name: Deploy Lambda code (monorepo — single build, many functions)
+description: |
+  Same packaging as **`lambda-deploy`** (Python or Node): one ZIP from the repo build, GitHub OIDC,
+  then **`aws lambda update-function-code`** for every function name listed in **`function-names`**.
+
+  For a single Lambda, use **`actions/lambda-deploy`** instead.
+
+  Caller must **`actions/checkout`** first. Grant **`permissions: id-token: write`** for OIDC.
+
+inputs:
+  aws-role-arn:
+    description: IAM role ARN for GitHub OIDC (needs lambda UpdateFunctionCode and related STS).
+    required: true
+  aws-region:
+    description: AWS region for both STS/session and Lambda API.
+    required: false
+    default: us-east-1
+  role-session-name:
+    description: sts:AssumeRoleWithWebIdentity RoleSessionName.
+    required: false
+    default: gha-deploy-lambda-monorepo
+
+  function-names:
+    description: |
+      Newline-separated AWS Lambda **function names** (logical name, not ARN). Blank lines ignored.
+      Example (YAML folded block):
+        function-names: |
+          my-app-staging-handler-a
+          my-app-staging-handler-b
+    required: true
+
+  runtime:
+    description: Build strategy — `python` (pip + zip) or `node` (`npm` + zip `dist/`).
+    required: true
+
+  # --- Python (same layout as `lambda-deploy`) ---
+  python-version:
+    description: Semantic version installed by setup-python.
+    required: false
+    default: "3.11"
+  lambda-directory:
+    description: Relative path to Lambda sources (requirements.txt + handler module file).
+    required: false
+    default: lambda
+  lambda-handler-file:
+    description: File name copied into build output (typically handler.py).
+    required: false
+    default: handler.py
+  lambda-zip-path:
+    description: Output ZIP written relative to the repository root.
+    required: false
+    default: lambda/deployment.zip
+
+  # --- Node (same defaults as `lambda-deploy`) ---
+  node-version:
+    description: Semantic version installed by setup-node (major or exact).
+    required: false
+    default: "20"
+  node-working-directory:
+    description: Working directory containing package.json before install/build (relative path).
+    required: false
+    default: "."
+  node-install-command:
+    description: Dependency install invoked with bash -eo pipefail from node-working-directory.
+    required: false
+    default: npm ci
+  node-build-command:
+    description: Build script (e.g. npm run build or npm run build:full).
+    required: false
+    default: npm run build:full
+  node-dist-directory:
+    description: Relative path (from node-working-directory) zipped as the Lambda package contents.
+    required: false
+    default: dist
+  node-install-prod-deps-in-dist:
+    description: Copy package.json + package-lock.json into node-dist-directory and npm ci --omit=dev --prefix dist.
+    required: false
+    default: "false"
+  node-zip-path:
+    description: Output ZIP path relative to node-working-directory.
+    required: false
+    default: deployment.zip
+
+outputs:
+  zip-path:
+    description: Path to the ZIP passed to update-function-code (relative to repository root).
+    value: ${{ steps.export-path.outputs.zip-path }}
+
+runs:
+  using: composite
+  steps:
+    - name: Set up Python
+      if: ${{ inputs.runtime == 'python' }}
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ inputs.python-version }}
+
+    - name: Build Python Lambda package
+      if: ${{ inputs.runtime == 'python' }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        SRC="${{ inputs.lambda-directory }}"
+        ZIP_REL="${{ inputs.lambda-zip-path }}"
+        BUILD_DIR="${SRC}/build"
+        WS="${GITHUB_WORKSPACE}"
+        ZIP_ABS="${WS%/}/${ZIP_REL}"
+        rm -rf "$BUILD_DIR" "$ZIP_ABS"
+        mkdir -p "$(dirname "$ZIP_ABS")"
+        mkdir -p "$BUILD_DIR"
+        python -m pip install --no-cache-dir -r "${SRC}/requirements.txt" -t "$BUILD_DIR"
+        cp "${SRC}/${{ inputs.lambda-handler-file }}" "$BUILD_DIR/"
+        (cd "$BUILD_DIR" && zip -r "$ZIP_ABS" . -q)
+        rm -rf "$BUILD_DIR"
+
+    - name: Set up Node.js
+      if: ${{ inputs.runtime == 'node' }}
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ inputs.node-version }}
+        cache: npm
+        cache-dependency-path: ${{ inputs.node-working-directory }}/package-lock.json
+
+    - name: Build Node.js Lambda package
+      if: ${{ inputs.runtime == 'node' }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        cd "${{ inputs.node-working-directory }}"
+        DIST="${{ inputs.node-dist-directory }}"
+        ZIP="${{ inputs.node-zip-path }}"
+        rm -rf "$DIST" "$ZIP"
+        ${{ inputs.node-install-command }}
+        ${{ inputs.node-build-command }}
+        if [ "${{ inputs.node-install-prod-deps-in-dist }}" = "true" ]; then
+          cp package.json package-lock.json "$DIST/"
+          npm ci --omit=dev --prefix "$DIST"
+        fi
+        (cd "$DIST" && zip -r "../${ZIP}" . -q)
+
+    - name: Resolve ZIP path for AWS CLI
+      id: export-path
+      shell: bash
+      run: |
+        set -euo pipefail
+        if [ "${{ inputs.runtime }}" = "python" ]; then
+          echo "zip-path=${{ inputs.lambda-zip-path }}" >> "$GITHUB_OUTPUT"
+        else
+          wd="${{ inputs.node-working-directory }}"
+          zip="${{ inputs.node-zip-path }}"
+          if [ "$wd" = "." ]; then
+            echo "zip-path=${zip}" >> "$GITHUB_OUTPUT"
+          else
+            echo "zip-path=${wd%/}/${zip}" >> "$GITHUB_OUTPUT"
+          fi
+        fi
+
+    - name: Configure AWS credentials (OIDC)
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        role-to-assume: ${{ inputs.aws-role-arn }}
+        role-session-name: ${{ inputs.role-session-name }}
+        aws-region: ${{ inputs.aws-region }}
+
+    - name: Update Lambda function code (all targets)
+      shell: bash
+      env:
+        FUNCTION_NAMES: ${{ inputs.function-names }}
+        AWS_REGION: ${{ inputs.aws-region }}
+        ZIP_PATH_REL: ${{ steps.export-path.outputs.zip-path }}
+      run: |
+        set -euo pipefail
+        WS="${GITHUB_WORKSPACE}"
+        ZIP_ABS="${WS%/}/${ZIP_PATH_REL}"
+        updated=0
+        while IFS= read -r fn || [[ -n "${fn}" ]]; do
+          fn="${fn#"${fn%%[![:space:]]*}"}"
+          fn="${fn%"${fn##*[![:space:]]}"}"
+          [[ -z "$fn" ]] && continue
+          echo "::group::update-function-code: $fn"
+          aws lambda update-function-code \
+            --function-name "$fn" \
+            --zip-file "fileb://${ZIP_ABS}" \
+            --region "${AWS_REGION}"
+          echo "::endgroup::"
+          updated=$((updated + 1))
+        done <<< "${FUNCTION_NAMES}"
+        if [[ "$updated" -lt 1 ]]; then
+          echo "::error::function-names did not yield any non-empty function name"
+          exit 1
+        fi

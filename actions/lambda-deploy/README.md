@@ -4,6 +4,8 @@ Composite action: **build** a Lambda deployment ZIP (**Python** or **Node.js**),
 
 Path: **`BullCredTech/gh-composite-actions/actions/lambda-deploy@<tag>`** (e.g. **`@v1.2.0`**).
 
+Multiple Lambdas that share **one** build artifact → use **`actions/lambda-deploy-monorepo`** (**`function-names`**).
+
 The action does **not** run `actions/checkout` — the calling workflow must check out the consuming repository first (same pattern as other actions in this collection).
 
 ## Prerequisites
