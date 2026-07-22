@@ -1,9 +1,10 @@
 name: Slack PR-open notification
 description: >
-  Ao abrir um PR, posta no Slack (Incoming Webhook) uma notificação em "ficha".
-  A descrição é UMA linha em português gerada pelo Gemini a partir do título +
-  descrição do PR (fallback = título do PR). O autor é exibido pelo nome do
-  perfil GitHub (fallback = login). Lê os dados do PR do contexto
+  Ao abrir um PR, posta no Slack (Incoming Webhook) uma notificação em "ficha"
+  com barra colorida. Título "Pull Request" fora do card (negrito); dentro:
+  descrição de 1 linha em PT gerada pelo Gemini (fallback = título do PR),
+  link do PR, repositório, autor (nome do perfil GitHub; fallback = login),
+  branch e menção ao time responsável. Lê os dados do PR do contexto
   github.event.pull_request — o workflow que chama precisa rodar em
   `on: pull_request`.
 
@@ -19,6 +20,10 @@ inputs:
       "Time responsável" é omitida.
     required: false
     default: ""
+  bar-color:
+    description: Cor (hex) da barra lateral do card no Slack.
+    required: false
+    default: "#4A90D9"
   gemini-api-key:
     description: API key do Google AI Studio para gerar a descrição de 1 linha em PT. Vazio -> usa o título do PR.
     required: false
@@ -36,6 +41,7 @@ runs:
       env:
         SLACK_WEBHOOK_URL: ${{ inputs.slack-webhook-url }}
         TEAM_ID: ${{ inputs.team-id }}
+        BAR_COLOR: ${{ inputs.bar-color }}
         GEMINI_API_KEY: ${{ inputs.gemini-api-key }}
         GEMINI_MODEL: ${{ inputs.gemini-model }}
         GITHUB_TOKEN: ${{ github.token }}
@@ -64,7 +70,6 @@ runs:
              "TÍTULO: " + $title + "\n\nDESCRIÇÃO:\n" + (if ($body | length) > 1000 then ($body[0:1000] + " …") else $body end)')
           request=$(jq -n --arg p "$PROMPT" \
             '{ contents: [ { parts: [ { text: $p } ] } ], generationConfig: { maxOutputTokens: 256, temperature: 0.2 } }')
-          # Chave no header (não vaza em log de URL). Falha -> mantém o título.
           http_code=$(curl -sS -o /tmp/gemini_resp.json -w "%{http_code}" \
             "https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent" \
             -H "x-goog-api-key: ${GEMINI_API_KEY}" -H "content-type: application/json" \
@@ -81,7 +86,6 @@ runs:
         fi
 
         # ---------- Autor: nome do perfil GitHub (fallback = login) ----------
-        # /users/{login} é público; o token só evita rate limit baixo.
         AUTHOR="$PR_AUTHOR"
         NAME=$(curl -sS \
           -H "Authorization: Bearer ${GITHUB_TOKEN}" \
@@ -95,16 +99,17 @@ runs:
         fi
 
         # ---------- Monta e posta a mensagem ----------
+        # "Pull Request" fica FORA do card (text), em negrito; a barra colorida
+        # (attachments) separa cards empilhados.
         if [ "$PR_DRAFT" = "true" ]; then
-          HEADER="📝 Pull Request (rascunho)"
+          HEADER="📝 *Pull Request (rascunho)*"
         else
-          HEADER="🔔 Pull Request"
+          HEADER="🔔 *Pull Request*"
         fi
 
-        # Menção ao time em linha própria (section) — mais confiável para NOTIFICAR
-        # que dentro de fields. TEAM_ID vazio -> linha omitida.
         payload=$(jq -n \
           --arg header "$HEADER" \
+          --arg color "$BAR_COLOR" \
           --arg desc "$DESC" \
           --arg url "$PR_URL" \
           --arg author "$AUTHOR" \
@@ -116,18 +121,20 @@ runs:
            ($repo | split("/") | last) as $repo_short |
            (if ($t | length) == 0 then "" else "\n👥 *Time responsável:* <!subteam^" + $t + ">" end) as $teamline |
            {
-             text: ("Novo PR em " + $repo_short + ": " + $desc),
-             blocks: [
-               { type: "header", text: { type: "plain_text", text: $header, emoji: true } },
-               { type: "section", text: { type: "mrkdwn", text: ("• " + $desc) } },
-               { type: "divider" },
-               { type: "section", text: { type: "mrkdwn", text: (
-                   "📌 *PR:* " + $url + "\n" +
-                   "📦 *Repositório:* " + $repo_short + "\n" +
-                   "🙋 *Aberto por:* " + $author + "\n" +
-                   "🌿 *Branch:* `" + $head + "` → `" + $base + "`" +
-                   $teamline ) } }
-             ]
+             text: $header,
+             attachments: [ {
+               color: $color,
+               blocks: [
+                 { type: "section", text: { type: "mrkdwn", text: ("• " + $desc) } },
+                 { type: "divider" },
+                 { type: "section", text: { type: "mrkdwn", text: (
+                     "📌 *PR:* " + $url + "\n" +
+                     "📦 *Repositório:* " + $repo_short + "\n" +
+                     "🙋 *Aberto por:* " + $author + "\n" +
+                     "🌿 *Branch:* `" + $head + "` → `" + $base + "`" +
+                     $teamline ) } }
+               ]
+             } ]
            }')
 
         slack_code=$(curl -sS -o /tmp/slack_resp.txt -w "%{http_code}" \
