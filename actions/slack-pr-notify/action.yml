@@ -4,9 +4,11 @@ description: >
   com barra colorida. Título "Pull Request" fora do card (negrito); dentro:
   descrição de 1 linha em PT gerada pelo Gemini (fallback = título do PR),
   link do PR, repositório, autor (nome do perfil GitHub; fallback = login),
-  branch e menção ao time responsável. Lê os dados do PR do contexto
-  github.event.pull_request — o workflow que chama precisa rodar em
-  `on: pull_request`.
+  branch e menção ao time responsável. Só notifica PRs cuja base esteja em
+  `target-branches` (default: main) e, por padrão, só depois que TODOS os
+  checks do commit concluírem com sucesso (`wait-for-checks`). Lê os dados do
+  PR do contexto github.event.pull_request — o workflow que chama precisa rodar
+  em `on: pull_request`.
 
 inputs:
   slack-webhook-url:
@@ -32,6 +34,40 @@ inputs:
     description: Modelo do Google AI Studio.
     required: false
     default: gemini-2.5-flash
+  target-branches:
+    description: >
+      Branches de destino (base do PR) para as quais notificar, separadas por
+      vírgula e/ou nova-linha. Match exato. PR cuja base não esteja na lista ->
+      sai sem notificar. Default: main.
+    required: false
+    default: main
+  wait-for-checks:
+    description: >
+      "true" (default) -> espera TODOS os outros checks do commit (head SHA)
+      concluírem e só notifica se todos passarem; se algum falhar, não notifica
+      (a menos que notify-on-failure). "false" -> notifica imediatamente ao
+      abrir o PR (comportamento antigo).
+    required: false
+    default: "true"
+  checks-timeout:
+    description: Tempo máximo (segundos) aguardando os checks concluírem. Estourou -> sai sem notificar (falha fechada). Default 1800 (30 min).
+    required: false
+    default: "1800"
+  checks-poll-interval:
+    description: Intervalo (segundos) entre as checagens de status dos checks. Default 30.
+    required: false
+    default: "30"
+  checks-initial-grace:
+    description: >
+      Janela inicial (segundos) para os checks aparecerem. Se após esse tempo
+      NENHUM check existir para o commit, notifica (não há o que aguardar).
+      Default 60.
+    required: false
+    default: "60"
+  notify-on-failure:
+    description: '"true" -> posta um card ❌ quando os checks falham. "false" (default) -> fica em silêncio na falha.'
+    required: false
+    default: "false"
 
 runs:
   using: "composite"
@@ -44,6 +80,12 @@ runs:
         BAR_COLOR: ${{ inputs.bar-color }}
         GEMINI_API_KEY: ${{ inputs.gemini-api-key }}
         GEMINI_MODEL: ${{ inputs.gemini-model }}
+        TARGET_BRANCHES: ${{ inputs.target-branches }}
+        WAIT_FOR_CHECKS: ${{ inputs.wait-for-checks }}
+        CHECKS_TIMEOUT: ${{ inputs.checks-timeout }}
+        CHECKS_POLL_INTERVAL: ${{ inputs.checks-poll-interval }}
+        CHECKS_INITIAL_GRACE: ${{ inputs.checks-initial-grace }}
+        NOTIFY_ON_FAILURE: ${{ inputs.notify-on-failure }}
         GITHUB_TOKEN: ${{ github.token }}
         PR_TITLE: ${{ github.event.pull_request.title }}
         PR_BODY: ${{ github.event.pull_request.body }}
@@ -51,6 +93,7 @@ runs:
         PR_AUTHOR: ${{ github.event.pull_request.user.login }}
         PR_BASE: ${{ github.event.pull_request.base.ref }}
         PR_HEAD: ${{ github.event.pull_request.head.ref }}
+        PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         PR_DRAFT: ${{ github.event.pull_request.draft }}
         REPO: ${{ github.repository }}
       run: |
@@ -59,6 +102,104 @@ runs:
         if [ -z "${SLACK_WEBHOOK_URL:-}" ]; then
           echo "::warning::slack-webhook-url não informado — pulando notificação."
           exit 0
+        fi
+
+        # ---------- Filtro de branch de destino (base do PR) ----------
+        # Só notifica PRs cuja base esteja em TARGET_BRANCHES (default: main).
+        # Aceita vírgula e/ou nova-linha como separador; match exato.
+        matched="false"
+        targets="$(printf '%s' "${TARGET_BRANCHES:-main}" | tr ',\n\r' '   ')"
+        for b in $targets; do
+          if [ "$b" = "$PR_BASE" ]; then matched="true"; break; fi
+        done
+        if [ "$matched" != "true" ]; then
+          echo "::notice::PR tem base '${PR_BASE}', fora de target-branches ('${TARGET_BRANCHES:-main}') — não notifica."
+          exit 0
+        fi
+
+        # ---------- Espera todos os checks concluírem (opcional) ----------
+        # Consulta check-runs + commit statuses do head SHA, ignorando os check
+        # runs do PRÓPRIO workflow run (details_url contém /actions/runs/<RUN_ID>/),
+        # até tudo concluir. Só segue se todos passaram.
+        CHECKS_STATE=""
+        if [ "${WAIT_FOR_CHECKS:-true}" = "true" ]; then
+          api="https://api.github.com/repos/${REPO}"
+          sha="${PR_HEAD_SHA}"
+          deadline=$(( $(date +%s) + CHECKS_TIMEOUT ))
+          first_seen=""
+
+          while :; do
+            now=$(date +%s)
+
+            # --- check runs (paginado), excluindo os do próprio run ---
+            page=1; total=0; collected=0
+            pending_runs=0; failed_runs=0; considered_runs=0
+            while :; do
+              resp=$(curl -sS \
+                -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+                -H "Accept: application/vnd.github+json" \
+                "${api}/commits/${sha}/check-runs?per_page=100&page=${page}" || echo '{}')
+              total=$(printf '%s' "$resp" | jq -r '.total_count // 0')
+              cnt=$(printf '%s' "$resp" | jq -r '(.check_runs // []) | length')
+              filtered=$(printf '%s' "$resp" | jq -c --arg rid "/actions/runs/${GITHUB_RUN_ID}/" \
+                '[(.check_runs // [])[] | select(((.details_url // "") | contains($rid)) | not)]')
+              p=$(printf '%s' "$filtered" | jq -r '[.[] | select(.status != "completed")] | length')
+              f=$(printf '%s' "$filtered" | jq -r '[.[] | select(.status == "completed") | (.conclusion // "") as $c | select($c=="failure" or $c=="cancelled" or $c=="timed_out" or $c=="action_required" or $c=="stale")] | length')
+              c=$(printf '%s' "$filtered" | jq -r 'length')
+              pending_runs=$(( pending_runs + p ))
+              failed_runs=$(( failed_runs + f ))
+              considered_runs=$(( considered_runs + c ))
+              collected=$(( collected + cnt ))
+              if [ "$cnt" -eq 0 ] || [ "$collected" -ge "$total" ]; then break; fi
+              page=$(( page + 1 ))
+            done
+
+            # --- commit statuses combinados (API legada de status) ---
+            st=$(curl -sS \
+              -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+              -H "Accept: application/vnd.github+json" \
+              "${api}/commits/${sha}/status" || echo '{}')
+            st_total=$(printf '%s' "$st" | jq -r '.total_count // 0')
+            st_state=$(printf '%s' "$st" | jq -r '.state // "pending"')
+            status_failed="false"; status_pending="false"
+            if [ "$st_total" -gt 0 ]; then
+              case "$st_state" in
+                failure|error) status_failed="true" ;;
+                pending)       status_pending="true" ;;
+              esac
+            fi
+
+            # --- decisão ---
+            if [ "$failed_runs" -gt 0 ] || [ "$status_failed" = "true" ]; then
+              echo "::warning::Checks falharam (check-runs com falha=$failed_runs, status combinado='$st_state')."
+              if [ "${NOTIFY_ON_FAILURE:-false}" = "true" ]; then
+                CHECKS_STATE="failure"; break
+              fi
+              echo "::notice::notify-on-failure=false — não notifica."
+              exit 0
+            fi
+
+            total_checks=$(( considered_runs + st_total ))
+            if [ "$total_checks" -eq 0 ]; then
+              # nenhum check ainda — aguarda aparecerem até a grace inicial
+              [ -z "$first_seen" ] && first_seen="$now"
+              if [ $(( now - first_seen )) -ge "$CHECKS_INITIAL_GRACE" ]; then
+                echo "::notice::Nenhum check encontrado após ${CHECKS_INITIAL_GRACE}s — notificando (sem checks para aguardar)."
+                CHECKS_STATE="success"; break
+              fi
+            elif [ "$pending_runs" -eq 0 ] && [ "$status_pending" = "false" ]; then
+              echo "::notice::Todos os checks concluíram com sucesso ($considered_runs check-runs + $st_total statuses)."
+              CHECKS_STATE="success"; break
+            fi
+
+            if [ "$now" -ge "$deadline" ]; then
+              echo "::warning::Timeout (${CHECKS_TIMEOUT}s) aguardando checks (pendentes: check-runs=$pending_runs, status='$st_state') — não notifica."
+              exit 0
+            fi
+
+            echo "Aguardando checks… (pendentes: check-runs=$pending_runs, status_state=$st_state) — nova checagem em ${CHECKS_POLL_INTERVAL}s"
+            sleep "$CHECKS_POLL_INTERVAL"
+          done
         fi
 
         # ---------- Descrição de 1 linha em PT (fallback = título) ----------
@@ -101,15 +242,21 @@ runs:
         # ---------- Monta e posta a mensagem ----------
         # "Pull Request" fica FORA do card (text), em negrito; a barra colorida
         # (attachments) separa cards empilhados.
+        COLOR="$BAR_COLOR"
         if [ "$PR_DRAFT" = "true" ]; then
           HEADER="📝 *Pull Request (rascunho)*"
+        elif [ "${CHECKS_STATE:-}" = "failure" ]; then
+          HEADER="❌ *Pull Request — checks falharam*"
+          COLOR="#D64545"
+        elif [ "${CHECKS_STATE:-}" = "success" ] && [ "${WAIT_FOR_CHECKS:-true}" = "true" ]; then
+          HEADER="✅ *Pull Request — checks OK*"
         else
           HEADER="🔔 *Pull Request*"
         fi
 
         payload=$(jq -n \
           --arg header "$HEADER" \
-          --arg color "$BAR_COLOR" \
+          --arg color "$COLOR" \
           --arg desc "$DESC" \
           --arg url "$PR_URL" \
           --arg author "$AUTHOR" \
