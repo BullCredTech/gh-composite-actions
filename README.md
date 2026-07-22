@@ -10,6 +10,7 @@ Centralized GitHub Actions composite actions shared across BullCredTech service 
 | [`eks-deploy`](./actions/eks-deploy) | `actions/eks-deploy` | Build/push to ECR (optional; includes `<environment>-latest` floating tag) and Helm deploy to EKS with rollout wait; or Helm-only with `skip-ecr-build`. |
 | [`lambda-deploy`](./actions/lambda-deploy) | `actions/lambda-deploy` | Build a Lambda ZIP (**Python pip** under `lambda/` or **Node** `npm` + `dist/`), OIDC **`configure-aws-credentials`**, and **`aws lambda update-function-code`** (one function). |
 | [`lambda-deploy-monorepo`](./actions/lambda-deploy-monorepo) | `actions/lambda-deploy-monorepo` | Same packaging as **`lambda-deploy`**, then **`update-function-code`** for **many** Lambda names (**`function-names`**, newline-separated). |
+| [`slack-pr-notify`](./actions/slack-pr-notify) | `actions/slack-pr-notify` | Ao abrir um PR (`on: pull_request`), posta no Slack (Incoming Webhook) uma notificação em ficha, com descrição de 1 linha em PT via Gemini (fallback = título) e menção ao time responsável. |
 
 ## Usage
 
