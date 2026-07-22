@@ -1,0 +1,142 @@
+name: Slack PR-open notification
+description: >
+  Ao abrir um PR, posta no Slack (Incoming Webhook) uma notificação em "ficha".
+  A descrição é UMA linha em português gerada pelo Gemini a partir do título +
+  descrição do PR (fallback = título do PR). O autor é exibido pelo nome do
+  perfil GitHub (fallback = login). Lê os dados do PR do contexto
+  github.event.pull_request — o workflow que chama precisa rodar em
+  `on: pull_request`.
+
+inputs:
+  slack-webhook-url:
+    description: Slack Incoming Webhook URL do canal de destino. Vazio -> sai sem falhar (falha fechada).
+    required: false
+    default: ""
+  team-id:
+    description: >
+      ID do Slack User Group do time responsável (formato S0XXXXXXX). Setado ->
+      a mensagem menciona <!subteam^ID> e NOTIFICA o time. Vazio -> a linha
+      "Time responsável" é omitida.
+    required: false
+    default: ""
+  gemini-api-key:
+    description: API key do Google AI Studio para gerar a descrição de 1 linha em PT. Vazio -> usa o título do PR.
+    required: false
+    default: ""
+  gemini-model:
+    description: Modelo do Google AI Studio.
+    required: false
+    default: gemini-2.5-flash
+
+runs:
+  using: "composite"
+  steps:
+    - name: Post PR notification to Slack
+      shell: bash
+      env:
+        SLACK_WEBHOOK_URL: ${{ inputs.slack-webhook-url }}
+        TEAM_ID: ${{ inputs.team-id }}
+        GEMINI_API_KEY: ${{ inputs.gemini-api-key }}
+        GEMINI_MODEL: ${{ inputs.gemini-model }}
+        GITHUB_TOKEN: ${{ github.token }}
+        PR_TITLE: ${{ github.event.pull_request.title }}
+        PR_BODY: ${{ github.event.pull_request.body }}
+        PR_URL: ${{ github.event.pull_request.html_url }}
+        PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+        PR_BASE: ${{ github.event.pull_request.base.ref }}
+        PR_HEAD: ${{ github.event.pull_request.head.ref }}
+        PR_DRAFT: ${{ github.event.pull_request.draft }}
+        REPO: ${{ github.repository }}
+      run: |
+        set -euo pipefail
+
+        if [ -z "${SLACK_WEBHOOK_URL:-}" ]; then
+          echo "::warning::slack-webhook-url não informado — pulando notificação."
+          exit 0
+        fi
+
+        # ---------- Descrição de 1 linha em PT (fallback = título) ----------
+        DESC="$PR_TITLE"
+        if [ -n "${GEMINI_API_KEY:-}" ]; then
+          PROMPT=$(jq -n --arg title "$PR_TITLE" --arg body "${PR_BODY:-}" \
+            '"Com base no título e na descrição de um Pull Request, escreva UMA única linha curta em português (no máximo ~90 caracteres) do que o PR faz. " +
+             "Sem bullet, sem aspas, sem preâmbulo e SEM quebra de linha. Não invente o que não estiver no texto. Responda apenas a frase.\n\n" +
+             "TÍTULO: " + $title + "\n\nDESCRIÇÃO:\n" + (if ($body | length) > 1000 then ($body[0:1000] + " …") else $body end)')
+          request=$(jq -n --arg p "$PROMPT" \
+            '{ contents: [ { parts: [ { text: $p } ] } ], generationConfig: { maxOutputTokens: 256, temperature: 0.2 } }')
+          # Chave no header (não vaza em log de URL). Falha -> mantém o título.
+          http_code=$(curl -sS -o /tmp/gemini_resp.json -w "%{http_code}" \
+            "https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent" \
+            -H "x-goog-api-key: ${GEMINI_API_KEY}" -H "content-type: application/json" \
+            --data "$request" || echo "000")
+          if [ "$http_code" = "200" ]; then
+            G=$(jq -r '[.candidates[0]?.content?.parts[]?.text // empty] | join("")' /tmp/gemini_resp.json)
+            G=$(printf '%s' "$G" | tr '\n' ' ' | sed 's/  */ /g; s/^ *//; s/ *$//')
+            if [ -n "$G" ]; then DESC="$G"; else echo "::warning::Gemini vazio — usando título."; fi
+          else
+            echo "::warning::Gemini falhou (HTTP $http_code) — usando título."
+          fi
+        else
+          echo "::warning::gemini-api-key ausente — usando título como descrição."
+        fi
+
+        # ---------- Autor: nome do perfil GitHub (fallback = login) ----------
+        # /users/{login} é público; o token só evita rate limit baixo.
+        AUTHOR="$PR_AUTHOR"
+        NAME=$(curl -sS \
+          -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+          -H "Accept: application/vnd.github+json" \
+          "https://api.github.com/users/${PR_AUTHOR}" 2>/dev/null \
+          | jq -r '.name // empty' 2>/dev/null || true)
+        if [ -n "${NAME:-}" ]; then
+          AUTHOR="$NAME"
+        else
+          echo "::warning::Sem .name para ${PR_AUTHOR} — usando login."
+        fi
+
+        # ---------- Monta e posta a mensagem ----------
+        if [ "$PR_DRAFT" = "true" ]; then
+          HEADER="📝 Pull Request (rascunho)"
+        else
+          HEADER="🔔 Pull Request"
+        fi
+
+        # Menção ao time em linha própria (section) — mais confiável para NOTIFICAR
+        # que dentro de fields. TEAM_ID vazio -> linha omitida.
+        payload=$(jq -n \
+          --arg header "$HEADER" \
+          --arg desc "$DESC" \
+          --arg url "$PR_URL" \
+          --arg author "$AUTHOR" \
+          --arg base "$PR_BASE" \
+          --arg head "$PR_HEAD" \
+          --arg repo "$REPO" \
+          --arg team "${TEAM_ID:-}" \
+          '($team | gsub("^\\s+|\\s+$"; "")) as $t |
+           ($repo | split("/") | last) as $repo_short |
+           (if ($t | length) == 0 then "" else "\n👥 *Time responsável:* <!subteam^" + $t + ">" end) as $teamline |
+           {
+             text: ("Novo PR em " + $repo_short + ": " + $desc),
+             blocks: [
+               { type: "header", text: { type: "plain_text", text: $header, emoji: true } },
+               { type: "section", text: { type: "mrkdwn", text: ("• " + $desc) } },
+               { type: "divider" },
+               { type: "section", text: { type: "mrkdwn", text: (
+                   "📌 *PR:* " + $url + "\n" +
+                   "📦 *Repositório:* " + $repo_short + "\n" +
+                   "🙋 *Aberto por:* " + $author + "\n" +
+                   "🌿 *Branch:* `" + $head + "` → `" + $base + "`" +
+                   $teamline ) } }
+             ]
+           }')
+
+        slack_code=$(curl -sS -o /tmp/slack_resp.txt -w "%{http_code}" \
+          -X POST -H 'Content-Type: application/json' \
+          --data "$payload" \
+          "$SLACK_WEBHOOK_URL")
+
+        echo "Slack respondeu HTTP $slack_code: $(cat /tmp/slack_resp.txt)"
+        if [ "$slack_code" -ge 400 ]; then
+          echo "::error::Falha ao postar no Slack (HTTP $slack_code)"
+          exit 1
+        fi
