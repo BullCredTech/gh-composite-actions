@@ -7,9 +7,9 @@ description: >
   título do PR), link do PR, repositório, branch e menção ao time responsável.
   Só notifica PRs cuja base esteja em `target-branches` (default: main) e, por
   padrão, só depois que TODOS os checks do commit concluírem com sucesso
-  (`wait-for-checks`) — o estado dos checks reflete no rótulo/cor do card. Lê
-  os dados do PR do contexto github.event.pull_request — o workflow que chama
-  precisa rodar em `on: pull_request`.
+  (`wait-for-checks`). Lê os dados do PR do contexto
+  github.event.pull_request — o workflow que chama precisa rodar em
+  `on: pull_request`.
 
 inputs:
   slack-webhook-url:
@@ -262,18 +262,16 @@ runs:
         fi
 
         # ---------- Monta e posta a mensagem ----------
-        # "Pull Request · Author: <autor>" fica FORA do card (text), em negrito;
-        # o autor é menção <@ID> (via user-map) ou nome (fallback). A barra
-        # colorida (attachments) separa cards empilhados. O estado dos checks
-        # (quando wait-for-checks=true) reflete no emoji/rótulo e na cor da barra.
+        # "🔔 Pull Request · Author: <autor>" fica FORA do card (text), em
+        # negrito; o autor é menção <@ID> (via user-map) ou nome (fallback). A
+        # barra colorida (attachments) separa cards empilhados; em falha (quando
+        # notify-on-failure=true) a barra fica vermelha.
         COLOR="$BAR_COLOR"
         if [ "$PR_DRAFT" = "true" ]; then
           HEADER="📝 *Pull Request (rascunho)* · Author: ${AUTHOR}"
         elif [ "${CHECKS_STATE:-}" = "failure" ]; then
-          HEADER="❌ *Pull Request — checks falharam* · Author: ${AUTHOR}"
           COLOR="#D64545"
-        elif [ "${CHECKS_STATE:-}" = "success" ] && [ "${WAIT_FOR_CHECKS:-true}" = "true" ]; then
-          HEADER="✅ *Pull Request — checks OK* · Author: ${AUTHOR}"
+          HEADER="🔔 *Pull Request* · Author: ${AUTHOR}"
         else
           HEADER="🔔 *Pull Request* · Author: ${AUTHOR}"
         fi
@@ -291,7 +289,7 @@ runs:
            ($repo | split("/") | last) as $repo_short |
            (if ($t | length) == 0 then "" else "\n👥 *Time responsável:* <!subteam^" + $t + ">" end) as $teamline |
            {
-             text: $header,
+             text: ($header + "\n"),
              attachments: [ {
                color: $color,
                blocks: [
