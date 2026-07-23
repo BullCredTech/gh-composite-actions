@@ -1,14 +1,15 @@
 name: Slack PR-open notification
 description: >
   Ao abrir um PR, posta no Slack (Incoming Webhook) uma notificação em "ficha"
-  com barra colorida. Título "Pull Request" fora do card (negrito); dentro:
-  descrição de 1 linha em PT gerada pelo Gemini (fallback = título do PR),
-  link do PR, repositório, autor (nome do perfil GitHub; fallback = login),
-  branch e menção ao time responsável. Só notifica PRs cuja base esteja em
-  `target-branches` (default: main) e, por padrão, só depois que TODOS os
-  checks do commit concluírem com sucesso (`wait-for-checks`). Lê os dados do
-  PR do contexto github.event.pull_request — o workflow que chama precisa rodar
-  em `on: pull_request`.
+  com barra colorida. Fora do card (negrito): "Pull Request · Author: <autor>",
+  com o autor mencionado (@) via user-map.json (fallback = nome do perfil
+  GitHub). Dentro: descrição de 1 linha em PT gerada pelo Gemini (fallback =
+  título do PR), link do PR, repositório, branch e menção ao time responsável.
+  Só notifica PRs cuja base esteja em `target-branches` (default: main) e, por
+  padrão, só depois que TODOS os checks do commit concluírem com sucesso
+  (`wait-for-checks`) — o estado dos checks reflete no rótulo/cor do card. Lê
+  os dados do PR do contexto github.event.pull_request — o workflow que chama
+  precisa rodar em `on: pull_request`.
 
 inputs:
   slack-webhook-url:
@@ -96,6 +97,7 @@ runs:
         PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         PR_DRAFT: ${{ github.event.pull_request.draft }}
         REPO: ${{ github.repository }}
+        USER_MAP: ${{ github.action_path }}/user-map.json
       run: |
         set -euo pipefail
 
@@ -209,8 +211,13 @@ runs:
             '"Com base no título e na descrição de um Pull Request, escreva UMA única linha curta em português (no máximo ~90 caracteres) do que o PR faz. " +
              "Sem bullet, sem aspas, sem preâmbulo e SEM quebra de linha. Não invente o que não estiver no texto. Responda apenas a frase.\n\n" +
              "TÍTULO: " + $title + "\n\nDESCRIÇÃO:\n" + (if ($body | length) > 1000 then ($body[0:1000] + " …") else $body end)')
+          # gemini-2.5-flash é modelo "thinking": os tokens de raciocínio contam
+          # dentro de maxOutputTokens. Com teto baixo, o thinking consumia o
+          # orçamento e a frase voltava cortada no meio (ex.: "...acessos do").
+          # thinkingBudget=0 desliga o raciocínio (desnecessário p/ 1 linha) e o
+          # teto maior dá folga.
           request=$(jq -n --arg p "$PROMPT" \
-            '{ contents: [ { parts: [ { text: $p } ] } ], generationConfig: { maxOutputTokens: 256, temperature: 0.2 } }')
+            '{ contents: [ { parts: [ { text: $p } ] } ], generationConfig: { maxOutputTokens: 512, temperature: 0.2, thinkingConfig: { thinkingBudget: 0 } } }')
           http_code=$(curl -sS -o /tmp/gemini_resp.json -w "%{http_code}" \
             "https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent" \
             -H "x-goog-api-key: ${GEMINI_API_KEY}" -H "content-type: application/json" \
@@ -239,19 +246,36 @@ runs:
           echo "::warning::Sem .name para ${PR_AUTHOR} — usando login."
         fi
 
+        # ---------- Menção ao autor (mapa estático login GitHub -> Slack ID) ----------
+        # Com ID no mapa: mostra SÓ a menção <@ID> (o Slack já renderiza o nome,
+        # então repetir o nome do perfil seria redundante). Sem ID: fallback pro
+        # nome do perfil (nada quebra).
+        if [ -f "$USER_MAP" ]; then
+          SLACK_ID=$(jq -r --arg l "$PR_AUTHOR" '.[$l] // empty' "$USER_MAP" 2>/dev/null || true)
+          if [ -n "${SLACK_ID:-}" ]; then
+            AUTHOR="<@${SLACK_ID}>"
+          else
+            echo "::warning::Autor ${PR_AUTHOR} não está no user-map — usando nome."
+          fi
+        else
+          echo "::warning::user-map.json não encontrado ($USER_MAP) — usando nome."
+        fi
+
         # ---------- Monta e posta a mensagem ----------
-        # "Pull Request" fica FORA do card (text), em negrito; a barra colorida
-        # (attachments) separa cards empilhados.
+        # "Pull Request · Author: <autor>" fica FORA do card (text), em negrito;
+        # o autor é menção <@ID> (via user-map) ou nome (fallback). A barra
+        # colorida (attachments) separa cards empilhados. O estado dos checks
+        # (quando wait-for-checks=true) reflete no emoji/rótulo e na cor da barra.
         COLOR="$BAR_COLOR"
         if [ "$PR_DRAFT" = "true" ]; then
-          HEADER="📝 *Pull Request (rascunho)*"
+          HEADER="📝 *Pull Request (rascunho)* · Author: ${AUTHOR}"
         elif [ "${CHECKS_STATE:-}" = "failure" ]; then
-          HEADER="❌ *Pull Request — checks falharam*"
+          HEADER="❌ *Pull Request — checks falharam* · Author: ${AUTHOR}"
           COLOR="#D64545"
         elif [ "${CHECKS_STATE:-}" = "success" ] && [ "${WAIT_FOR_CHECKS:-true}" = "true" ]; then
-          HEADER="✅ *Pull Request — checks OK*"
+          HEADER="✅ *Pull Request — checks OK* · Author: ${AUTHOR}"
         else
-          HEADER="🔔 *Pull Request*"
+          HEADER="🔔 *Pull Request* · Author: ${AUTHOR}"
         fi
 
         payload=$(jq -n \
@@ -259,7 +283,6 @@ runs:
           --arg color "$COLOR" \
           --arg desc "$DESC" \
           --arg url "$PR_URL" \
-          --arg author "$AUTHOR" \
           --arg base "$PR_BASE" \
           --arg head "$PR_HEAD" \
           --arg repo "$REPO" \
@@ -277,7 +300,6 @@ runs:
                  { type: "section", text: { type: "mrkdwn", text: (
                      "📌 *PR:* " + $url + "\n" +
                      "📦 *Repositório:* " + $repo_short + "\n" +
-                     "🙋 *Aberto por:* " + $author + "\n" +
                      "🌿 *Branch:* `" + $head + "` → `" + $base + "`" +
                      $teamline ) } }
                ]
