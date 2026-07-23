@@ -68,8 +68,13 @@ runs:
             '"Com base no título e na descrição de um Pull Request, escreva UMA única linha curta em português (no máximo ~90 caracteres) do que o PR faz. " +
              "Sem bullet, sem aspas, sem preâmbulo e SEM quebra de linha. Não invente o que não estiver no texto. Responda apenas a frase.\n\n" +
              "TÍTULO: " + $title + "\n\nDESCRIÇÃO:\n" + (if ($body | length) > 1000 then ($body[0:1000] + " …") else $body end)')
+          # gemini-2.5-flash é modelo "thinking": os tokens de raciocínio contam
+          # dentro de maxOutputTokens. Com teto baixo, o thinking consumia o
+          # orçamento e a frase voltava cortada no meio (ex.: "...acessos do").
+          # thinkingBudget=0 desliga o raciocínio (desnecessário p/ 1 linha) e o
+          # teto maior dá folga.
           request=$(jq -n --arg p "$PROMPT" \
-            '{ contents: [ { parts: [ { text: $p } ] } ], generationConfig: { maxOutputTokens: 256, temperature: 0.2 } }')
+            '{ contents: [ { parts: [ { text: $p } ] } ], generationConfig: { maxOutputTokens: 512, temperature: 0.2, thinkingConfig: { thinkingBudget: 0 } } }')
           http_code=$(curl -sS -o /tmp/gemini_resp.json -w "%{http_code}" \
             "https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent" \
             -H "x-goog-api-key: ${GEMINI_API_KEY}" -H "content-type: application/json" \
