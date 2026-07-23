@@ -262,22 +262,27 @@ runs:
         fi
 
         # ---------- Monta e posta a mensagem ----------
-        # "🔔 Pull Request · Author: <autor>" fica FORA do card (text), em
-        # negrito; o autor é menção <@ID> (via user-map) ou nome (fallback). A
-        # barra colorida (attachments) separa cards empilhados; em falha (quando
-        # notify-on-failure=true) a barra fica vermelha.
+        # Título "🔔 Pull Request · Author: <autor>" (linha inteira em negrito)
+        # fica FORA da barra, num block de topo, precedido de um espaçador
+        # (linha invisível) que dá respiro entre cards empilhados. O autor é
+        # menção <@ID> (via user-map) ou nome (fallback). Linhas de detalhe sem
+        # ícones. Em falha (notify-on-failure=true) a barra fica vermelha.
         COLOR="$BAR_COLOR"
         if [ "$PR_DRAFT" = "true" ]; then
-          HEADER="📝 *Pull Request (rascunho)* · Author: ${AUTHOR}"
+          HEADER="📝 *Pull Request (rascunho) · Author: ${AUTHOR}*"
+          FALLBACK="📝 Pull Request (rascunho)"
         elif [ "${CHECKS_STATE:-}" = "failure" ]; then
           COLOR="#D64545"
-          HEADER="🔔 *Pull Request* · Author: ${AUTHOR}"
+          HEADER="🔔 *Pull Request · Author: ${AUTHOR}*"
+          FALLBACK="🔔 Pull Request"
         else
-          HEADER="🔔 *Pull Request* · Author: ${AUTHOR}"
+          HEADER="🔔 *Pull Request · Author: ${AUTHOR}*"
+          FALLBACK="🔔 Pull Request"
         fi
 
         payload=$(jq -n \
           --arg header "$HEADER" \
+          --arg fallback "$FALLBACK" \
           --arg color "$COLOR" \
           --arg desc "$DESC" \
           --arg url "$PR_URL" \
@@ -287,18 +292,22 @@ runs:
           --arg team "${TEAM_ID:-}" \
           '($team | gsub("^\\s+|\\s+$"; "")) as $t |
            ($repo | split("/") | last) as $repo_short |
-           (if ($t | length) == 0 then "" else "\n👥 *Time responsável:* <!subteam^" + $t + ">" end) as $teamline |
+           (if ($t | length) == 0 then "" else "\n*Time responsável:* <!subteam^" + $t + ">" end) as $teamline |
            {
-             text: ($header + "\n"),
+             text: $fallback,
+             blocks: [
+               { type: "context", elements: [ { type: "mrkdwn", text: "​" } ] },
+               { type: "section", text: { type: "mrkdwn", text: $header } }
+             ],
              attachments: [ {
                color: $color,
                blocks: [
                  { type: "section", text: { type: "mrkdwn", text: ("• " + $desc) } },
                  { type: "divider" },
                  { type: "section", text: { type: "mrkdwn", text: (
-                     "📦 *Repositório:* " + $repo_short + "\n" +
-                     "📌 *PR:* " + $url + "\n" +
-                     "🌿 *Branch:* `" + $head + "` → `" + $base + "`" +
+                     "*Repositório:* " + $repo_short + "\n" +
+                     "*PR:* " + $url + "\n" +
+                     "*Branch:* `" + $head + "` → `" + $base + "`" +
                      $teamline ) } }
                ]
              } ]
