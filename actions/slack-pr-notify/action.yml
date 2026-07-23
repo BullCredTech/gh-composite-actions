@@ -296,8 +296,8 @@ runs:
                  { type: "section", text: { type: "mrkdwn", text: ("• " + $desc) } },
                  { type: "divider" },
                  { type: "section", text: { type: "mrkdwn", text: (
-                     "📌 *PR:* " + $url + "\n" +
                      "📦 *Repositório:* " + $repo_short + "\n" +
+                     "📌 *PR:* " + $url + "\n" +
                      "🌿 *Branch:* `" + $head + "` → `" + $base + "`" +
                      $teamline ) } }
                ]
