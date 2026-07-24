@@ -239,7 +239,7 @@ runs:
           # Bot do Claude: nome fixo + emoji custom do workspace. Não é usuário
           # Slack (não tem menção) nem tem `.name` de perfil útil, então pula a
           # consulta ao GitHub e o user-map.
-          AUTHOR=":claude-dancing: Claude"
+          AUTHOR="Claude :claude-dancing:"
         else
           NAME=$(curl -sS \
             -H "Authorization: Bearer ${GITHUB_TOKEN}" \
