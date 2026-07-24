@@ -239,7 +239,7 @@ runs:
           # Bot do Claude: nome fixo + emoji custom do workspace. Não é usuário
           # Slack (não tem menção) nem tem `.name` de perfil útil, então pula a
           # consulta ao GitHub e o user-map.
-          AUTHOR=":claude-dancing: Claude"
+          AUTHOR="Claude :claude-dancing:"
         else
           NAME=$(curl -sS \
             -H "Authorization: Bearer ${GITHUB_TOKEN}" \
@@ -276,8 +276,8 @@ runs:
         # ícones. Em falha (notify-on-failure=true) a barra fica vermelha.
         COLOR="$BAR_COLOR"
         if [ "$PR_DRAFT" = "true" ]; then
-          HEADER="⏰ *Pull Request (Draft) · Author: ${AUTHOR}*"
-          FALLBACK="⏰ Pull Request (Draft)"
+          HEADER="🔔 *Pull Request (Draft) · Author: ${AUTHOR}*"
+          FALLBACK="🔔 Pull Request (Draft)"
         elif [ "${CHECKS_STATE:-}" = "failure" ]; then
           COLOR="#D64545"
           HEADER="🔔 *Pull Request · Author: ${AUTHOR}*"
