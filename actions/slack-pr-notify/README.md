@@ -19,7 +19,7 @@ Só notifica quando **duas condições** são satisfeitas:
 1. **Branch de destino**: a base do PR está em `target-branches` (default: `main`). PR para outra branch → sai sem notificar.
 2. **Checks concluídos** (quando `wait-for-checks: true`, o default): a action faz *poll* de todos os check-runs e commit statuses do commit (head SHA) — **ignorando o próprio check run** do workflow de notificação — e só posta quando **todos passaram**. Se algum falhar, fica em silêncio (a menos que `notify-on-failure: true`).
 
-O cabeçalho reflete o resultado: `✅ Pull Request — checks OK`, `❌ Pull Request — checks falharam`, `🔔 Pull Request (Draft)` ou `🔔 Pull Request` (quando `wait-for-checks: false`).
+O cabeçalho reflete o resultado: `✅ Pull Request — checks OK`, `❌ Pull Request — checks falharam`, `⏰ Pull Request (Draft)` ou `🔔 Pull Request` (quando `wait-for-checks: false`).
 
 Lê os dados do PR do contexto `github.event.pull_request`, então o workflow que chama **precisa rodar em `on: pull_request`**.
 
