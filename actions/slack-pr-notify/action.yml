@@ -235,30 +235,37 @@ runs:
 
         # ---------- Autor: nome do perfil GitHub (fallback = login) ----------
         AUTHOR="$PR_AUTHOR"
-        NAME=$(curl -sS \
-          -H "Authorization: Bearer ${GITHUB_TOKEN}" \
-          -H "Accept: application/vnd.github+json" \
-          "https://api.github.com/users/${PR_AUTHOR}" 2>/dev/null \
-          | jq -r '.name // empty' 2>/dev/null || true)
-        if [ -n "${NAME:-}" ]; then
-          AUTHOR="$NAME"
+        if [ "$PR_AUTHOR" = "claude[bot]" ]; then
+          # Bot do Claude: nome fixo + emoji custom do workspace. Não é usuário
+          # Slack (não tem menção) nem tem `.name` de perfil útil, então pula a
+          # consulta ao GitHub e o user-map.
+          AUTHOR=":claude-dancing: Claude"
         else
-          echo "::warning::Sem .name para ${PR_AUTHOR} — usando login."
-        fi
-
-        # ---------- Menção ao autor (mapa estático login GitHub -> Slack ID) ----------
-        # Com ID no mapa: mostra SÓ a menção <@ID> (o Slack já renderiza o nome,
-        # então repetir o nome do perfil seria redundante). Sem ID: fallback pro
-        # nome do perfil (nada quebra).
-        if [ -f "$USER_MAP" ]; then
-          SLACK_ID=$(jq -r --arg l "$PR_AUTHOR" '.[$l] // empty' "$USER_MAP" 2>/dev/null || true)
-          if [ -n "${SLACK_ID:-}" ]; then
-            AUTHOR="<@${SLACK_ID}>"
+          NAME=$(curl -sS \
+            -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/users/${PR_AUTHOR}" 2>/dev/null \
+            | jq -r '.name // empty' 2>/dev/null || true)
+          if [ -n "${NAME:-}" ]; then
+            AUTHOR="$NAME"
           else
-            echo "::warning::Autor ${PR_AUTHOR} não está no user-map — usando nome."
+            echo "::warning::Sem .name para ${PR_AUTHOR} — usando login."
           fi
-        else
-          echo "::warning::user-map.json não encontrado ($USER_MAP) — usando nome."
+
+          # ---------- Menção ao autor (mapa estático login GitHub -> Slack ID) ----------
+          # Com ID no mapa: mostra SÓ a menção <@ID> (o Slack já renderiza o nome,
+          # então repetir o nome do perfil seria redundante). Sem ID: fallback pro
+          # nome do perfil (nada quebra).
+          if [ -f "$USER_MAP" ]; then
+            SLACK_ID=$(jq -r --arg l "$PR_AUTHOR" '.[$l] // empty' "$USER_MAP" 2>/dev/null || true)
+            if [ -n "${SLACK_ID:-}" ]; then
+              AUTHOR="<@${SLACK_ID}>"
+            else
+              echo "::warning::Autor ${PR_AUTHOR} não está no user-map — usando nome."
+            fi
+          else
+            echo "::warning::user-map.json não encontrado ($USER_MAP) — usando nome."
+          fi
         fi
 
         # ---------- Monta e posta a mensagem ----------
@@ -269,8 +276,8 @@ runs:
         # ícones. Em falha (notify-on-failure=true) a barra fica vermelha.
         COLOR="$BAR_COLOR"
         if [ "$PR_DRAFT" = "true" ]; then
-          HEADER="📝 *Pull Request (rascunho) · Author: ${AUTHOR}*"
-          FALLBACK="📝 Pull Request (rascunho)"
+          HEADER="⏰ *Pull Request (Draft) · Author: ${AUTHOR}*"
+          FALLBACK="⏰ Pull Request (Draft)"
         elif [ "${CHECKS_STATE:-}" = "failure" ]; then
           COLOR="#D64545"
           HEADER="🔔 *Pull Request · Author: ${AUTHOR}*"
