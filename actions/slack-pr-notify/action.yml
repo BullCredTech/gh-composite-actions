@@ -141,10 +141,12 @@ runs:
           [ -z "$MSG_CH" ] && MSG_CH="$CHANNEL_ID"
           B64=$(printf '%s' "$body" | sed -n 's|.*author=\([A-Za-z0-9+/=]*\).*|\1|p')
           if [ -n "$B64" ]; then MSG_AUTHOR=$(printf '%s' "$B64" | base64 -d 2>/dev/null || printf '%s' "${PR_AUTHOR:-}"); else MSG_AUTHOR="${PR_AUTHOR:-}"; fi
+          DB64=$(printf '%s' "$body" | sed -n 's|.*desc=\([A-Za-z0-9+/=]*\).*|\1|p')
+          MSG_DESC=$(printf '%s' "$DB64" | base64 -d 2>/dev/null || printf '%s' "${PR_TITLE:-}")
           if [ -z "$MSG_TS" ]; then echo "::warning::ts inválido — nada editado."; exit 0; fi
           repo_short=$(printf '%s' "$REPO" | awk -F/ '{print $NF}')
           upd=$(jq -n \
-            --arg ch "$MSG_CH" --arg ts "$MSG_TS" --arg author "$MSG_AUTHOR" \
+            --arg ch "$MSG_CH" --arg ts "$MSG_TS" --arg author "$MSG_AUTHOR" --arg desc "$MSG_DESC" \
             --arg url "$PR_URL" --arg repo "$repo_short" --arg head "$PR_HEAD" --arg base "$PR_BASE" \
             '{ channel: $ch, ts: $ts, text: "🟡 Pull Request · APPROVED",
                blocks: [
@@ -154,6 +156,8 @@ runs:
                attachments: [ {
                  color: "#d4a72c",
                  blocks: [
+                   { type: "section", text: { type: "mrkdwn", text: ("• " + $desc) } },
+                   { type: "divider" },
                    { type: "section", text: { type: "mrkdwn", text: (
                        "*Repositório:* " + $repo + "\n" +
                        "*PR:* " + $url + "\n" +
@@ -199,11 +203,13 @@ runs:
           else
             MSG_AUTHOR="${PR_AUTHOR:-}"
           fi
+          DB64=$(printf '%s' "$body" | sed -n 's|.*desc=\([A-Za-z0-9+/=]*\).*|\1|p')
+          MSG_DESC=$(printf '%s' "$DB64" | base64 -d 2>/dev/null || printf '%s' "${PR_TITLE:-}")
 
           repo_short=$(printf '%s' "$REPO" | awk -F/ '{print $NF}')
           upd=$(jq -n \
             --arg ch "$MSG_CH" --arg ts "$MSG_TS" \
-            --arg author "$MSG_AUTHOR" \
+            --arg author "$MSG_AUTHOR" --arg desc "$MSG_DESC" \
             --arg url "$PR_URL" --arg repo "$repo_short" \
             --arg head "$PR_HEAD" --arg base "$PR_BASE" \
             '{ channel: $ch, ts: $ts, text: "✅ Pull Request · MERGED",
@@ -214,6 +220,8 @@ runs:
                attachments: [ {
                  color: "#2da44e",
                  blocks: [
+                   { type: "section", text: { type: "mrkdwn", text: ("• " + $desc) } },
+                   { type: "divider" },
                    { type: "section", text: { type: "mrkdwn", text: (
                        "*Repositório:* " + $repo + "\n" +
                        "*PR:* " + $url + "\n" +
@@ -469,8 +477,9 @@ runs:
           if [ -n "${PR_NUMBER:-}" ]; then
             # Guarda também o autor (base64) pra reusar o mesmo nome/menção no merge.
             AUTHOR_B64=$(printf '%s' "$AUTHOR" | base64 | tr -d '\n')
+            DESC_B64=$(printf '%s' "$DESC" | base64 | tr -d '\n')
             gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" \
-              -f body="<!-- slack-pr-notify: ts=${TS} channel=${CH} author=${AUTHOR_B64} -->" >/dev/null 2>&1 \
+              -f body="<!-- slack-pr-notify: ts=${TS} channel=${CH} author=${AUTHOR_B64} desc=${DESC_B64} -->" >/dev/null 2>&1 \
               || echo "::warning::não consegui guardar o ts no PR — edição no merge não vai funcionar."
           fi
         else
