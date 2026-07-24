@@ -276,8 +276,8 @@ runs:
         # ícones. Em falha (notify-on-failure=true) a barra fica vermelha.
         COLOR="$BAR_COLOR"
         if [ "$PR_DRAFT" = "true" ]; then
-          HEADER="⏰ *Pull Request (Draft) · Author: ${AUTHOR}*"
-          FALLBACK="⏰ Pull Request (Draft)"
+          HEADER="🔔 *Pull Request (Draft) · Author: ${AUTHOR}*"
+          FALLBACK="🔔 Pull Request (Draft)"
         elif [ "${CHECKS_STATE:-}" = "failure" ]; then
           COLOR="#D64545"
           HEADER="🔔 *Pull Request · Author: ${AUTHOR}*"
