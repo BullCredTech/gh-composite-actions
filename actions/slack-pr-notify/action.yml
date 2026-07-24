@@ -315,12 +315,10 @@ runs:
               esac
             fi
 
-            # --- decisão ---
-            if [ "$failed_runs" -gt 0 ] || [ "$status_failed" = "true" ]; then
-              echo "::warning::Checks falharam (check-runs com falha=$failed_runs, status combinado='$st_state')."
-              CHECKS_RESULT="failure"; return
-            fi
-
+            # --- decisão: só decide DEPOIS que NADA está pendente ---
+            # (não marca falha no 1º check vermelho — espera todos concluírem,
+            # senão um check que falha rápido, ou um "gate" latchado, viraria ❌
+            # prematuro enquanto os outros ainda rodam.)
             total_checks=$(( considered_runs + st_total ))
             if [ "$total_checks" -eq 0 ]; then
               # nenhum check ainda — aguarda aparecerem até a grace inicial
@@ -330,6 +328,11 @@ runs:
                 CHECKS_RESULT="none"; return
               fi
             elif [ "$pending_runs" -eq 0 ] && [ "$status_pending" = "false" ]; then
+              # todos concluíram → agora sim decide
+              if [ "$failed_runs" -gt 0 ] || [ "$status_failed" = "true" ]; then
+                echo "::warning::Checks concluíram com falha (com falha=$failed_runs, status combinado='$st_state')."
+                CHECKS_RESULT="failure"; return
+              fi
               echo "::notice::Todos os checks concluíram com sucesso ($considered_runs check-runs + $st_total statuses)."
               CHECKS_RESULT="success"; return
             fi
