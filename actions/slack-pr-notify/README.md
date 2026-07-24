@@ -45,9 +45,17 @@ Lê os dados do PR do contexto `github.event.pull_request`, então o workflow qu
 
 ### Modo bot token — edita a mensagem no merge (🔔 → ✅)
 
-Com `slack-bot-token` + `channel-id`, a action posta via `chat.postMessage` e guarda o `ts` da mensagem num comentário oculto do PR. Quando o PR é **mergeado**, a mesma mensagem é **editada** para ✅. Pra isso o caller precisa:
+Com `slack-bot-token` + `channel-id`, a action posta via `chat.postMessage` e guarda o `ts` (+ autor) da mensagem num comentário oculto do PR. Depois **edita a mesma mensagem** conforme o PR evolui:
 
-- disparar também no evento **`closed`** (`types: [opened, ..., closed]`);
+| Estado | Card | Barra |
+|--------|------|-------|
+| Aberto | 🔔 `Pull Request · Author: …` | azul |
+| **Aprovado** (review) | 🟡 `Pull Request · APPROVED · aguardando merge · Author: …` | amarela |
+| **Mergeado** | ✅ `Pull Request · MERGED · Author: …` | verde |
+
+Pra isso o caller precisa:
+
+- disparar em **`pull_request`** (`types: [opened, ..., closed]`) **e** em **`pull_request_review`** (`types: [submitted]`);
 - permissão **`pull-requests: write`** (pra gravar/ler o `ts` no comentário oculto);
 - passar `slack-bot-token` + `channel-id`.
 
@@ -56,6 +64,8 @@ name: Notify Slack on PR
 on:
   pull_request:
     types: [opened, reopened, ready_for_review, closed]
+  pull_request_review:
+    types: [submitted]         # edita pra "aprovado" quando aprovarem
 permissions:
   contents: read
   checks: read

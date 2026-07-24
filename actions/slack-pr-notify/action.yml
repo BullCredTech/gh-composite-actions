@@ -112,12 +112,63 @@ runs:
         PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         PR_DRAFT: ${{ github.event.pull_request.draft }}
         PR_NUMBER: ${{ github.event.pull_request.number }}
+        EVENT_NAME: ${{ github.event_name }}
         EVENT_ACTION: ${{ github.event.action }}
         PR_MERGED: ${{ github.event.pull_request.merged }}
+        REVIEW_STATE: ${{ github.event.review.state }}
         REPO: ${{ github.repository }}
         USER_MAP: ${{ github.action_path }}/user-map.json
       run: |
         set -euo pipefail
+
+        # ===== APPROVED: review aprovado -> edita a mensagem pra "aprovado, aguardando merge" =====
+        if [ "${EVENT_NAME:-}" = "pull_request_review" ]; then
+          if [ "${REVIEW_STATE:-}" != "approved" ]; then
+            echo "Review não é approved (${REVIEW_STATE:-}) — nada a editar."; exit 0
+          fi
+          if [ "${PR_MERGED:-}" = "true" ]; then
+            echo "PR já mergeado — não rebaixa o card."; exit 0
+          fi
+          if [ -z "${SLACK_BOT_TOKEN:-}" ] || [ -z "${CHANNEL_ID:-}" ]; then
+            echo "::warning::approved sem bot token/channel — não dá pra editar."; exit 0
+          fi
+          marker="<!-- slack-pr-notify:"
+          body=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" --jq '.[].body' 2>/dev/null \
+            | grep -F "$marker" | tail -1 || true)
+          if [ -z "$body" ]; then echo "::warning::ts não encontrado no PR #${PR_NUMBER} — nada editado."; exit 0; fi
+          MSG_TS=$(printf '%s' "$body" | sed -n 's/.*ts=\([0-9.]*\).*/\1/p')
+          MSG_CH=$(printf '%s' "$body" | sed -n 's/.*channel=\([A-Za-z0-9]*\).*/\1/p')
+          [ -z "$MSG_CH" ] && MSG_CH="$CHANNEL_ID"
+          B64=$(printf '%s' "$body" | sed -n 's|.*author=\([A-Za-z0-9+/=]*\).*|\1|p')
+          if [ -n "$B64" ]; then MSG_AUTHOR=$(printf '%s' "$B64" | base64 -d 2>/dev/null || printf '%s' "${PR_AUTHOR:-}"); else MSG_AUTHOR="${PR_AUTHOR:-}"; fi
+          if [ -z "$MSG_TS" ]; then echo "::warning::ts inválido — nada editado."; exit 0; fi
+          repo_short=$(printf '%s' "$REPO" | awk -F/ '{print $NF}')
+          upd=$(jq -n \
+            --arg ch "$MSG_CH" --arg ts "$MSG_TS" --arg author "$MSG_AUTHOR" \
+            --arg url "$PR_URL" --arg repo "$repo_short" --arg head "$PR_HEAD" --arg base "$PR_BASE" \
+            '{ channel: $ch, ts: $ts, text: "🟡 Pull Request · APPROVED",
+               blocks: [
+                 { type: "context", elements: [ { type: "mrkdwn", text: "​" } ] },
+                 { type: "section", text: { type: "mrkdwn", text: ("🟡 *Pull Request · APPROVED · aguardando merge · Author: " + $author + "*") } }
+               ],
+               attachments: [ {
+                 color: "#d4a72c",
+                 blocks: [
+                   { type: "section", text: { type: "mrkdwn", text: (
+                       "*Repositório:* " + $repo + "\n" +
+                       "*PR:* " + $url + "\n" +
+                       "*Branch:* `" + $head + "` → `" + $base + "`") } }
+                 ]
+               } ] }')
+          code=$(curl -sS -o /tmp/slack_upd.json -w "%{http_code}" \
+            -X POST -H "Authorization: Bearer ${SLACK_BOT_TOKEN}" \
+            -H 'Content-Type: application/json; charset=utf-8' \
+            --data "$upd" https://slack.com/api/chat.update)
+          ok=$(jq -r '.ok' /tmp/slack_upd.json 2>/dev/null || echo "false")
+          echo "chat.update (approved) HTTP $code ok=$ok resp=$(cat /tmp/slack_upd.json)"
+          if [ "$ok" != "true" ]; then echo "::warning::chat.update (approved) falhou (não bloqueia)."; fi
+          exit 0
+        fi
 
         # ===== MERGE: PR fechado e mergeado -> edita a mensagem original (🔔 -> ✅) =====
         # Só roda quando o workflow chamador inclui o evento `closed` E há bot token
