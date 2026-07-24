@@ -452,26 +452,56 @@ runs:
           else
             IE="🔵"; IL="Aguardando review"; IC="$BAR_COLOR"
           fi
-          post=$(emit_card "$IE" "$IL" "$IC" | jq --arg ch "$CHANNEL_ID" '. + {channel: $ch}')
-          slack_code=$(curl -sS -o /tmp/slack_resp.json -w "%{http_code}" \
-            -X POST -H "Authorization: Bearer ${SLACK_BOT_TOKEN}" \
-            -H 'Content-Type: application/json; charset=utf-8' \
-            --data "$post" https://slack.com/api/chat.postMessage)
-          ok=$(jq -r '.ok' /tmp/slack_resp.json 2>/dev/null || echo "false")
-          echo "chat.postMessage ($IL) HTTP $slack_code ok=$ok"
-          if [ "$ok" != "true" ]; then
-            echo "::error::chat.postMessage falhou: $(cat /tmp/slack_resp.json)"; exit 1
+          card=$(emit_card "$IE" "$IL" "$IC")
+
+          # Se NÃO é a abertura (ex.: synchronize/reopened em novo push) e já existe
+          # uma mensagem (ts no comentário oculto), EDITA a existente em vez de
+          # postar nova — evita card duplicado a cada push e faz a mensagem voltar
+          # pra "Aguardando checks" enquanto a CI re-roda.
+          TS=""; CH=""
+          if [ "${EVENT_ACTION:-}" != "opened" ] && [ -n "${PR_NUMBER:-}" ]; then
+            prev=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" --jq '.[].body' 2>/dev/null \
+              | grep -F "<!-- slack-pr-notify:" | tail -1 || true)
+            if [ -n "$prev" ]; then
+              TS=$(printf '%s' "$prev" | sed -n 's/.*ts=\([0-9.]*\).*/\1/p')
+              CH=$(printf '%s' "$prev" | sed -n 's/.*channel=\([A-Za-z0-9]*\).*/\1/p')
+              [ -z "$CH" ] && CH="$CHANNEL_ID"
+            fi
           fi
-          TS=$(jq -r '.ts' /tmp/slack_resp.json)
-          CH=$(jq -r '.channel' /tmp/slack_resp.json)
-          # Guarda ts+channel+autor+desc (base64) num comentário OCULTO do PR pros
-          # runs de review/merge editarem depois. (Requer pull-requests: write.)
-          if [ -n "${PR_NUMBER:-}" ]; then
-            AUTHOR_B64=$(printf '%s' "$AUTHOR" | base64 | tr -d '\n')
-            DESC_B64=$(printf '%s' "$DESC" | base64 | tr -d '\n')
-            gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" \
-              -f body="<!-- slack-pr-notify: ts=${TS} channel=${CH} author=${AUTHOR_B64} desc=${DESC_B64} -->" >/dev/null 2>&1 \
-              || echo "::warning::não consegui guardar o ts no PR — edição posterior não vai funcionar."
+
+          if [ -n "$TS" ]; then
+            # edita a mensagem existente (re-push)
+            upd=$(printf '%s' "$card" | jq --arg ch "$CH" --arg ts "$TS" '. + {channel: $ch, ts: $ts}')
+            slack_code=$(curl -sS -o /tmp/slack_resp.json -w "%{http_code}" \
+              -X POST -H "Authorization: Bearer ${SLACK_BOT_TOKEN}" \
+              -H 'Content-Type: application/json; charset=utf-8' \
+              --data "$upd" https://slack.com/api/chat.update)
+            ok=$(jq -r '.ok' /tmp/slack_resp.json 2>/dev/null || echo "false")
+            echo "chat.update ($IL, re-push) HTTP $slack_code ok=$ok"
+            if [ "$ok" != "true" ]; then echo "::warning::chat.update falhou: $(cat /tmp/slack_resp.json)"; fi
+          else
+            # posta mensagem nova e guarda o ts (abertura, ou anterior não achada)
+            post=$(printf '%s' "$card" | jq --arg ch "$CHANNEL_ID" '. + {channel: $ch}')
+            slack_code=$(curl -sS -o /tmp/slack_resp.json -w "%{http_code}" \
+              -X POST -H "Authorization: Bearer ${SLACK_BOT_TOKEN}" \
+              -H 'Content-Type: application/json; charset=utf-8' \
+              --data "$post" https://slack.com/api/chat.postMessage)
+            ok=$(jq -r '.ok' /tmp/slack_resp.json 2>/dev/null || echo "false")
+            echo "chat.postMessage ($IL) HTTP $slack_code ok=$ok"
+            if [ "$ok" != "true" ]; then
+              echo "::error::chat.postMessage falhou: $(cat /tmp/slack_resp.json)"; exit 1
+            fi
+            TS=$(jq -r '.ts' /tmp/slack_resp.json)
+            CH=$(jq -r '.channel' /tmp/slack_resp.json)
+            # Guarda ts+channel+autor+desc (base64) num comentário OCULTO do PR pros
+            # runs de review/merge/synchronize editarem depois. (Requer pull-requests: write.)
+            if [ -n "${PR_NUMBER:-}" ]; then
+              AUTHOR_B64=$(printf '%s' "$AUTHOR" | base64 | tr -d '\n')
+              DESC_B64=$(printf '%s' "$DESC" | base64 | tr -d '\n')
+              gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" \
+                -f body="<!-- slack-pr-notify: ts=${TS} channel=${CH} author=${AUTHOR_B64} desc=${DESC_B64} -->" >/dev/null 2>&1 \
+                || echo "::warning::não consegui guardar o ts no PR — edição posterior não vai funcionar."
+            fi
           fi
 
           # Draft não espera checks; sem wait já postou "Aguardando review".
