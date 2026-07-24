@@ -265,8 +265,10 @@ runs:
         # Consulta check-runs + commit statuses do head SHA, ignorando os check
         # runs do PRÓPRIO workflow run (details_url contém /actions/runs/<RUN_ID>/),
         # até tudo concluir. Só segue se todos passaram.
-        CHECKS_STATE=""
-        if [ "${WAIT_FOR_CHECKS:-true}" = "true" ]; then
+        # Vira função (seta CHECKS_RESULT = success|none|failure|timeout, sem sair)
+        # pra rodar DEPOIS de já ter postado o card "Aguardando checks".
+        CHECKS_RESULT=""
+        wait_checks() {
           api="https://api.github.com/repos/${REPO}"
           sha="${PR_HEAD_SHA}"
           deadline=$(( $(date +%s) + CHECKS_TIMEOUT ))
@@ -316,11 +318,7 @@ runs:
             # --- decisão ---
             if [ "$failed_runs" -gt 0 ] || [ "$status_failed" = "true" ]; then
               echo "::warning::Checks falharam (check-runs com falha=$failed_runs, status combinado='$st_state')."
-              if [ "${NOTIFY_ON_FAILURE:-false}" = "true" ]; then
-                CHECKS_STATE="failure"; break
-              fi
-              echo "::notice::notify-on-failure=false — não notifica."
-              exit 0
+              CHECKS_RESULT="failure"; return
             fi
 
             total_checks=$(( considered_runs + st_total ))
@@ -328,23 +326,23 @@ runs:
               # nenhum check ainda — aguarda aparecerem até a grace inicial
               [ -z "$first_seen" ] && first_seen="$now"
               if [ $(( now - first_seen )) -ge "$CHECKS_INITIAL_GRACE" ]; then
-                echo "::notice::Nenhum check encontrado após ${CHECKS_INITIAL_GRACE}s — notificando (sem checks para aguardar)."
-                CHECKS_STATE="success"; break
+                echo "::notice::Nenhum check encontrado após ${CHECKS_INITIAL_GRACE}s (sem checks para aguardar)."
+                CHECKS_RESULT="none"; return
               fi
             elif [ "$pending_runs" -eq 0 ] && [ "$status_pending" = "false" ]; then
               echo "::notice::Todos os checks concluíram com sucesso ($considered_runs check-runs + $st_total statuses)."
-              CHECKS_STATE="success"; break
+              CHECKS_RESULT="success"; return
             fi
 
             if [ "$now" -ge "$deadline" ]; then
-              echo "::warning::Timeout (${CHECKS_TIMEOUT}s) aguardando checks (pendentes: check-runs=$pending_runs, status='$st_state') — não notifica."
-              exit 0
+              echo "::warning::Timeout (${CHECKS_TIMEOUT}s) aguardando checks (pendentes: check-runs=$pending_runs, status='$st_state')."
+              CHECKS_RESULT="timeout"; return
             fi
 
             echo "Aguardando checks… (pendentes: check-runs=$pending_runs, status_state=$st_state) — nova checagem em ${CHECKS_POLL_INTERVAL}s"
             sleep "$CHECKS_POLL_INTERVAL"
           done
-        fi
+        }
 
         # ---------- Descrição de 1 linha em PT (fallback = título) ----------
         DESC="$PR_TITLE"
@@ -410,92 +408,112 @@ runs:
           fi
         fi
 
-        # ---------- Monta e posta a mensagem ----------
-        # Título "🔔 Pull Request · Author: <autor>" (linha inteira em negrito)
-        # fica FORA da barra, num block de topo, precedido de um espaçador
-        # (linha invisível) que dá respiro entre cards empilhados. O autor é
-        # menção <@ID> (via user-map) ou nome (fallback). Linhas de detalhe sem
-        # ícones. Em falha (notify-on-failure=true) a barra fica vermelha.
-        COLOR="$BAR_COLOR"
-        if [ "$PR_DRAFT" = "true" ]; then
-          COLOR="#8b949e"
-          HEADER="⚪ *Pull Request · Draft · Author: ${AUTHOR}*"
-          FALLBACK="⚪ Pull Request · Draft"
-        elif [ "${CHECKS_STATE:-}" = "failure" ]; then
-          COLOR="#D64545"
-          HEADER="🔵 *Pull Request · Aguardando review · Author: ${AUTHOR}*"
-          FALLBACK="🔵 Pull Request · Aguardando review"
-        else
-          HEADER="🔵 *Pull Request · Aguardando review · Author: ${AUTHOR}*"
-          FALLBACK="🔵 Pull Request · Aguardando review"
-        fi
-
-        payload=$(jq -n \
-          --arg header "$HEADER" \
-          --arg fallback "$FALLBACK" \
-          --arg color "$COLOR" \
-          --arg desc "$DESC" \
-          --arg url "$PR_URL" \
-          --arg base "$PR_BASE" \
-          --arg head "$PR_HEAD" \
-          --arg repo "$REPO" \
-          --arg team "${TEAM_ID:-}" \
-          '($team | gsub("^\\s+|\\s+$"; "")) as $t |
-           ($repo | split("/") | last) as $repo_short |
-           (if ($t | length) == 0 then "" else "\n*Time responsável:* <!subteam^" + $t + ">" end) as $teamline |
-           {
-             text: $fallback,
-             blocks: [
-               { type: "context", elements: [ { type: "mrkdwn", text: "​" } ] },
-               { type: "section", text: { type: "mrkdwn", text: $header } }
-             ],
-             attachments: [ {
-               color: $color,
+        # ---------- Card + fluxo (posta e edita a MESMA mensagem) ----------
+        # emit_card EMOJI LABEL COLOR → payload JSON (sem channel/ts).
+        emit_card() {
+          jq -n \
+            --arg emoji "$1" --arg label "$2" --arg color "$3" \
+            --arg author "$AUTHOR" --arg desc "$DESC" \
+            --arg url "$PR_URL" --arg base "$PR_BASE" --arg head "$PR_HEAD" \
+            --arg repo "$REPO" --arg team "${TEAM_ID:-}" \
+            '($team | gsub("^\\s+|\\s+$"; "")) as $t |
+             ($repo | split("/") | last) as $repo_short |
+             (if ($t | length) == 0 then "" else "\n*Time responsável:* <!subteam^" + $t + ">" end) as $teamline |
+             {
+               text: ($emoji + " Pull Request · " + $label),
                blocks: [
-                 { type: "section", text: { type: "mrkdwn", text: ("• " + $desc) } },
-                 { type: "divider" },
-                 { type: "section", text: { type: "mrkdwn", text: (
-                     "*Repositório:* " + $repo_short + "\n" +
-                     "*PR:* " + $url + "\n" +
-                     "*Branch:* `" + $head + "` → `" + $base + "`" +
-                     $teamline ) } }
-               ]
-             } ]
-           }')
+                 { type: "context", elements: [ { type: "mrkdwn", text: "​" } ] },
+                 { type: "section", text: { type: "mrkdwn", text: ($emoji + " *Pull Request · " + $label + " · Author: " + $author + "*") } }
+               ],
+               attachments: [ {
+                 color: $color,
+                 blocks: [
+                   { type: "section", text: { type: "mrkdwn", text: ("• " + $desc) } },
+                   { type: "divider" },
+                   { type: "section", text: { type: "mrkdwn", text: (
+                       "*Repositório:* " + $repo_short + "\n" +
+                       "*PR:* " + $url + "\n" +
+                       "*Branch:* `" + $head + "` → `" + $base + "`" +
+                       $teamline ) } }
+                 ]
+               } ]
+             }'
+        }
+
+        WAIT="${WAIT_FOR_CHECKS:-true}"
 
         if [ -n "${SLACK_BOT_TOKEN:-}" ] && [ -n "${CHANNEL_ID:-}" ]; then
-          # chat.postMessage (bot token) → captura o `ts` pra poder EDITAR no merge.
-          post=$(printf '%s' "$payload" | jq --arg ch "$CHANNEL_ID" '. + {channel: $ch}')
+          # ===== Modo bot token: posta e depois EDITA a mesma mensagem =====
+          # Estado inicial:
+          if [ "$PR_DRAFT" = "true" ]; then
+            IE="⚪"; IL="Draft"; IC="#8b949e"
+          elif [ "$WAIT" = "true" ]; then
+            IE="🟠"; IL="Aguardando checks"; IC="#d29922"
+          else
+            IE="🔵"; IL="Aguardando review"; IC="$BAR_COLOR"
+          fi
+          post=$(emit_card "$IE" "$IL" "$IC" | jq --arg ch "$CHANNEL_ID" '. + {channel: $ch}')
           slack_code=$(curl -sS -o /tmp/slack_resp.json -w "%{http_code}" \
             -X POST -H "Authorization: Bearer ${SLACK_BOT_TOKEN}" \
             -H 'Content-Type: application/json; charset=utf-8' \
             --data "$post" https://slack.com/api/chat.postMessage)
           ok=$(jq -r '.ok' /tmp/slack_resp.json 2>/dev/null || echo "false")
-          echo "chat.postMessage HTTP $slack_code ok=$ok"
+          echo "chat.postMessage ($IL) HTTP $slack_code ok=$ok"
           if [ "$ok" != "true" ]; then
             echo "::error::chat.postMessage falhou: $(cat /tmp/slack_resp.json)"; exit 1
           fi
           TS=$(jq -r '.ts' /tmp/slack_resp.json)
           CH=$(jq -r '.channel' /tmp/slack_resp.json)
-          # Guarda ts+channel num comentário OCULTO do PR pro run de merge editar depois.
-          # (Requer permissão pull-requests: write / issues: write no workflow chamador.)
+          # Guarda ts+channel+autor+desc (base64) num comentário OCULTO do PR pros
+          # runs de review/merge editarem depois. (Requer pull-requests: write.)
           if [ -n "${PR_NUMBER:-}" ]; then
-            # Guarda também o autor (base64) pra reusar o mesmo nome/menção no merge.
             AUTHOR_B64=$(printf '%s' "$AUTHOR" | base64 | tr -d '\n')
             DESC_B64=$(printf '%s' "$DESC" | base64 | tr -d '\n')
             gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" \
               -f body="<!-- slack-pr-notify: ts=${TS} channel=${CH} author=${AUTHOR_B64} desc=${DESC_B64} -->" >/dev/null 2>&1 \
-              || echo "::warning::não consegui guardar o ts no PR — edição no merge não vai funcionar."
+              || echo "::warning::não consegui guardar o ts no PR — edição posterior não vai funcionar."
           fi
-        else
-          # Fallback legado: Incoming Webhook (sem edição no merge).
-          slack_code=$(curl -sS -o /tmp/slack_resp.txt -w "%{http_code}" \
-            -X POST -H 'Content-Type: application/json' \
-            --data "$payload" \
-            "$SLACK_WEBHOOK_URL")
-          echo "Slack (webhook) respondeu HTTP $slack_code: $(cat /tmp/slack_resp.txt)"
-          if [ "$slack_code" -ge 400 ]; then
-            echo "::error::Falha ao postar no Slack (HTTP $slack_code)"
-            exit 1
-          fi
+
+          # Draft não espera checks; sem wait já postou "Aguardando review".
+          if [ "$PR_DRAFT" = "true" ] || [ "$WAIT" != "true" ]; then exit 0; fi
+
+          # Espera os checks e edita conforme o desfecho.
+          wait_checks
+          case "$CHECKS_RESULT" in
+            success|none) FE="🔵"; FL="Aguardando review"; FC="$BAR_COLOR" ;;
+            failure)      FE="❌"; FL="Checks falharam"; FC="#D64545" ;;
+            *)            echo "::warning::timeout — card permanece em 'Aguardando checks'."; exit 0 ;;
+          esac
+          upd=$(emit_card "$FE" "$FL" "$FC" | jq --arg ch "$CH" --arg ts "$TS" '. + {channel: $ch, ts: $ts}')
+          code=$(curl -sS -o /tmp/slack_upd.json -w "%{http_code}" \
+            -X POST -H "Authorization: Bearer ${SLACK_BOT_TOKEN}" \
+            -H 'Content-Type: application/json; charset=utf-8' \
+            --data "$upd" https://slack.com/api/chat.update)
+          uok=$(jq -r '.ok' /tmp/slack_upd.json 2>/dev/null || echo "false")
+          echo "chat.update ($FL) HTTP $code ok=$uok"
+          if [ "$uok" != "true" ]; then echo "::warning::chat.update falhou: $(cat /tmp/slack_upd.json)"; fi
+          exit 0
+        fi
+
+        # ===== Modo webhook (legado): espera checks e posta 1x (sem edição) =====
+        E="🔵"; L="Aguardando review"; C="$BAR_COLOR"
+        if [ "$PR_DRAFT" = "true" ]; then
+          E="⚪"; L="Draft"; C="#8b949e"
+        elif [ "$WAIT" = "true" ]; then
+          wait_checks
+          case "$CHECKS_RESULT" in
+            failure)
+              if [ "${NOTIFY_ON_FAILURE:-false}" = "true" ]; then C="#D64545"; else echo "::notice::notify-on-failure=false — não notifica."; exit 0; fi ;;
+            timeout) echo "::notice::timeout aguardando checks — não notifica."; exit 0 ;;
+          esac
+        fi
+        payload=$(emit_card "$E" "$L" "$C")
+        slack_code=$(curl -sS -o /tmp/slack_resp.txt -w "%{http_code}" \
+          -X POST -H 'Content-Type: application/json' \
+          --data "$payload" \
+          "$SLACK_WEBHOOK_URL")
+        echo "Slack (webhook) respondeu HTTP $slack_code: $(cat /tmp/slack_resp.txt)"
+        if [ "$slack_code" -ge 400 ]; then
+          echo "::error::Falha ao postar no Slack (HTTP $slack_code)"
+          exit 1
         fi

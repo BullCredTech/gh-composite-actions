@@ -50,10 +50,14 @@ Com `slack-bot-token` + `channel-id`, a action posta via `chat.postMessage` e gu
 | Estado | Card | Barra |
 |--------|------|-------|
 | Draft | ⚪ `Pull Request · Draft · Author: …` | cinza |
-| Aberto | 🔵 `Pull Request · Aguardando review · Author: …` | azul |
+| Aguardando checks | 🟠 `Pull Request · Aguardando checks · Author: …` | laranja |
+| Aguardando review (checks ok) | 🔵 `Pull Request · Aguardando review · Author: …` | azul |
+| Checks falharam | ❌ `Pull Request · Checks falharam · Author: …` | vermelha |
 | Aprovado (review) | 🟡 `Pull Request · Aprovado · Aguardando merge · Author: …` | amarela |
 | Mergeado | 🟢 `Pull Request · Mergeado · Author: …` | verde |
 | Fechado (sem merge) | 🔴 `Pull Request · Fechado · Author: …` | vermelha |
+
+Com `wait-for-checks: true` (default), o card abre em **🟠 Aguardando checks** e é editado pra 🔵 (checks ok) ou ❌ (checks falharam) quando a CI conclui. Com `false`, abre direto em 🔵.
 
 Pra isso o caller precisa:
 
