@@ -148,10 +148,10 @@ runs:
           upd=$(jq -n \
             --arg ch "$MSG_CH" --arg ts "$MSG_TS" --arg author "$MSG_AUTHOR" --arg desc "$MSG_DESC" \
             --arg url "$PR_URL" --arg repo "$repo_short" --arg head "$PR_HEAD" --arg base "$PR_BASE" \
-            '{ channel: $ch, ts: $ts, text: "🟡 Pull Request · APPROVED",
+            '{ channel: $ch, ts: $ts, text: "🟡 Pull Request · Aprovado",
                blocks: [
                  { type: "context", elements: [ { type: "mrkdwn", text: "​" } ] },
-                 { type: "section", text: { type: "mrkdwn", text: ("🟡 *Pull Request · APPROVED · aguardando merge · Author: " + $author + "*") } }
+                 { type: "section", text: { type: "mrkdwn", text: ("🟡 *Pull Request · Aprovado · Aguardando merge · Author: " + $author + "*") } }
                ],
                attachments: [ {
                  color: "#d4a72c",
@@ -174,15 +174,12 @@ runs:
           exit 0
         fi
 
-        # ===== MERGE: PR fechado e mergeado -> edita a mensagem original (🔔 -> ✅) =====
+        # ===== CLOSED: PR fechado -> edita pra Mergeado (🟢) ou Fechado sem merge (🔴) =====
         # Só roda quando o workflow chamador inclui o evento `closed` E há bot token
         # (o `ts` da mensagem foi guardado num comentário oculto do PR na abertura).
         if [ "${EVENT_ACTION:-}" = "closed" ]; then
-          if [ "${PR_MERGED:-}" != "true" ]; then
-            echo "PR fechado sem merge — nada a editar."; exit 0
-          fi
           if [ -z "${SLACK_BOT_TOKEN:-}" ] || [ -z "${CHANNEL_ID:-}" ]; then
-            echo "::warning::merge sem bot token/channel — não dá pra editar a mensagem."; exit 0
+            echo "::warning::closed sem bot token/channel — não dá pra editar a mensagem."; exit 0
           fi
           marker="<!-- slack-pr-notify:"
           body=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" --jq '.[].body' 2>/dev/null \
@@ -195,8 +192,7 @@ runs:
           [ -z "$MSG_CH" ] && MSG_CH="$CHANNEL_ID"
           if [ -z "$MSG_TS" ]; then echo "::warning::ts inválido — nada editado."; exit 0; fi
 
-          # Autor: reusa o mesmo nome/menção da abertura (guardado em base64);
-          # fallback pro login cru se não vier.
+          # Autor + descrição: reusa os da abertura (guardados em base64).
           AUTHOR_B64=$(printf '%s' "$body" | sed -n 's|.*author=\([A-Za-z0-9+/=]*\).*|\1|p')
           if [ -n "$AUTHOR_B64" ]; then
             MSG_AUTHOR=$(printf '%s' "$AUTHOR_B64" | base64 -d 2>/dev/null || printf '%s' "${PR_AUTHOR:-}")
@@ -206,19 +202,27 @@ runs:
           DB64=$(printf '%s' "$body" | sed -n 's|.*desc=\([A-Za-z0-9+/=]*\).*|\1|p')
           MSG_DESC=$(printf '%s' "$DB64" | base64 -d 2>/dev/null || printf '%s' "${PR_TITLE:-}")
 
+          # Mergeado (🟢 verde) ou fechado sem merge (🔴 vermelho).
+          if [ "${PR_MERGED:-}" = "true" ]; then
+            ST_EMOJI="🟢"; ST_LABEL="Mergeado"; ST_COLOR="#2da44e"
+          else
+            ST_EMOJI="🔴"; ST_LABEL="Fechado"; ST_COLOR="#d1242f"
+          fi
+
           repo_short=$(printf '%s' "$REPO" | awk -F/ '{print $NF}')
           upd=$(jq -n \
             --arg ch "$MSG_CH" --arg ts "$MSG_TS" \
             --arg author "$MSG_AUTHOR" --arg desc "$MSG_DESC" \
+            --arg emoji "$ST_EMOJI" --arg label "$ST_LABEL" --arg color "$ST_COLOR" \
             --arg url "$PR_URL" --arg repo "$repo_short" \
             --arg head "$PR_HEAD" --arg base "$PR_BASE" \
-            '{ channel: $ch, ts: $ts, text: "✅ Pull Request · MERGED",
+            '{ channel: $ch, ts: $ts, text: ($emoji + " Pull Request · " + $label),
                blocks: [
                  { type: "context", elements: [ { type: "mrkdwn", text: "​" } ] },
-                 { type: "section", text: { type: "mrkdwn", text: ("✅ *Pull Request · MERGED · Author: " + $author + "*") } }
+                 { type: "section", text: { type: "mrkdwn", text: ($emoji + " *Pull Request · " + $label + " · Author: " + $author + "*") } }
                ],
                attachments: [ {
-                 color: "#2da44e",
+                 color: $color,
                  blocks: [
                    { type: "section", text: { type: "mrkdwn", text: ("• " + $desc) } },
                    { type: "divider" },
@@ -414,15 +418,16 @@ runs:
         # ícones. Em falha (notify-on-failure=true) a barra fica vermelha.
         COLOR="$BAR_COLOR"
         if [ "$PR_DRAFT" = "true" ]; then
-          HEADER="⏰ *Pull Request (Draft) · Author: ${AUTHOR}*"
-          FALLBACK="⏰ Pull Request (Draft)"
+          COLOR="#8b949e"
+          HEADER="⚪ *Pull Request · Draft · Author: ${AUTHOR}*"
+          FALLBACK="⚪ Pull Request · Draft"
         elif [ "${CHECKS_STATE:-}" = "failure" ]; then
           COLOR="#D64545"
-          HEADER="🔔 *Pull Request · Author: ${AUTHOR}*"
-          FALLBACK="🔔 Pull Request"
+          HEADER="🔵 *Pull Request · Aguardando review · Author: ${AUTHOR}*"
+          FALLBACK="🔵 Pull Request · Aguardando review"
         else
-          HEADER="🔔 *Pull Request · Author: ${AUTHOR}*"
-          FALLBACK="🔔 Pull Request"
+          HEADER="🔵 *Pull Request · Aguardando review · Author: ${AUTHOR}*"
+          FALLBACK="🔵 Pull Request · Aguardando review"
         fi
 
         payload=$(jq -n \

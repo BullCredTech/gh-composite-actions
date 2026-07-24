@@ -28,7 +28,7 @@ Lê os dados do PR do contexto `github.event.pull_request`, então o workflow qu
 | Input | Obrigatório | Default | Descrição |
 |-------|-------------|---------|-----------|
 | `slack-webhook-url` | não* | `""` | Incoming Webhook do canal. Vazio → o job sai sem falhar (falha fechada). |
-| `slack-bot-token` | não* | `""` | Bot token (`xoxb-...`). Presente → posta via `chat.postMessage`, guarda o `ts` num comentário oculto do PR e **edita a mensagem no merge** (🔔 → ✅). Requer `channel-id` + evento `closed` no caller. Ausente → usa o webhook (sem edição no merge). |
+| `slack-bot-token` | não* | `""` | Bot token (`xoxb-...`). Presente → posta via `chat.postMessage`, guarda o `ts` num comentário oculto do PR e **edita a mensagem** conforme o PR evolui (Draft ⚪ → Aguardando review 🔵 → Aprovado 🟡 → Mergeado 🟢 / Fechado 🔴). Requer `channel-id` + eventos `closed`/`pull_request_review` no caller. Ausente → usa o webhook (sem edição). |
 | `channel-id` | não* | `""` | ID do canal (`C0XXXX`) para o `chat.postMessage`. Obrigatório com `slack-bot-token`. |
 | `team-id` | não | `""` | Slack User Group ID (`S0XXXXXXX`). Setado → menção `<!subteam^ID>` que **notifica** o time. Vazio → linha omitida. |
 | `bar-color` | não | `#4A90D9` | Cor (hex) da barra lateral do card. Em falha de checks, usa vermelho automaticamente. |
@@ -43,15 +43,17 @@ Lê os dados do PR do contexto `github.event.pull_request`, então o workflow qu
 
 \* Precisa de **`slack-webhook-url` OU `slack-bot-token`**. Sem nenhum, a action não posta nada (não quebra).
 
-### Modo bot token — edita a mensagem no merge (🔔 → ✅)
+### Modo bot token — edita a mensagem conforme o PR evolui
 
-Com `slack-bot-token` + `channel-id`, a action posta via `chat.postMessage` e guarda o `ts` (+ autor) da mensagem num comentário oculto do PR. Depois **edita a mesma mensagem** conforme o PR evolui:
+Com `slack-bot-token` + `channel-id`, a action posta via `chat.postMessage` e guarda o `ts` (+ autor + descrição) num comentário oculto do PR. Depois **edita a mesma mensagem** em cada transição:
 
 | Estado | Card | Barra |
 |--------|------|-------|
-| Aberto | 🔔 `Pull Request · Author: …` | azul |
-| **Aprovado** (review) | 🟡 `Pull Request · APPROVED · aguardando merge · Author: …` | amarela |
-| **Mergeado** | ✅ `Pull Request · MERGED · Author: …` | verde |
+| Draft | ⚪ `Pull Request · Draft · Author: …` | cinza |
+| Aberto | 🔵 `Pull Request · Aguardando review · Author: …` | azul |
+| Aprovado (review) | 🟡 `Pull Request · Aprovado · Aguardando merge · Author: …` | amarela |
+| Mergeado | 🟢 `Pull Request · Mergeado · Author: …` | verde |
+| Fechado (sem merge) | 🔴 `Pull Request · Fechado · Author: …` | vermelha |
 
 Pra isso o caller precisa:
 
