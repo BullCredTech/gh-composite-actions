@@ -29,6 +29,16 @@ inputs:
     description: ID do canal Slack (C0XXXX) para o chat.postMessage. Obrigatório quando slack-bot-token é usado.
     required: false
     default: ""
+  ignore-checks:
+    description: >
+      Nomes de check-runs a IGNORAR na espera/decisão (separados por vírgula
+      e/ou nova-linha). Um check nessa lista não conta como pendente nem como
+      falha — útil pra "merge gates" que falham DE PROPÓSITO (ex.: o
+      weekend/holiday merge gate, org-wide) e não devem virar ❌ na notificação.
+      Não afeta o branch protection (o gate segue barrando o merge). Default já
+      inclui o gate central; o caller pode sobrescrever/estender.
+    required: false
+    default: weekend-holiday-merge-gate
   team-id:
     description: >
       ID do Slack User Group do time responsável (formato S0XXXXXXX). Setado ->
@@ -92,6 +102,7 @@ runs:
         SLACK_WEBHOOK_URL: ${{ inputs.slack-webhook-url }}
         SLACK_BOT_TOKEN: ${{ inputs.slack-bot-token }}
         CHANNEL_ID: ${{ inputs.channel-id }}
+        IGNORE_CHECKS: ${{ inputs.ignore-checks }}
         TEAM_ID: ${{ inputs.team-id }}
         BAR_COLOR: ${{ inputs.bar-color }}
         GEMINI_API_KEY: ${{ inputs.gemini-api-key }}
@@ -287,8 +298,13 @@ runs:
                 "${api}/commits/${sha}/check-runs?per_page=100&page=${page}" || echo '{}')
               total=$(printf '%s' "$resp" | jq -r '.total_count // 0')
               cnt=$(printf '%s' "$resp" | jq -r '(.check_runs // []) | length')
-              filtered=$(printf '%s' "$resp" | jq -c --arg rid "/actions/runs/${GITHUB_RUN_ID}/" \
-                '[(.check_runs // [])[] | select(((.details_url // "") | contains($rid)) | not)]')
+              filtered=$(printf '%s' "$resp" | jq -c \
+                --arg rid "/actions/runs/${GITHUB_RUN_ID}/" \
+                --arg ign "${IGNORE_CHECKS:-}" \
+                '($ign | gsub("[,\r]"; "\n") | split("\n") | map(gsub("^\\s+|\\s+$"; "")) | map(select(length > 0))) as $ignore |
+                 [(.check_runs // [])[]
+                   | select(((.details_url // "") | contains($rid)) | not)
+                   | select((.name // "") as $n | ($ignore | index($n) | not))]')
               p=$(printf '%s' "$filtered" | jq -r '[.[] | select(.status != "completed")] | length')
               f=$(printf '%s' "$filtered" | jq -r '[.[] | select(.status == "completed") | (.conclusion // "") as $c | select($c=="failure" or $c=="cancelled" or $c=="timed_out" or $c=="action_required" or $c=="stale")] | length')
               c=$(printf '%s' "$filtered" | jq -r 'length')
