@@ -236,16 +236,27 @@ runs:
               const st = parseState(stateC.body);
               const sinceLastMin = (nowSec - st.last) / 60;
               if (sinceLastMin < REPING_MIN) { skipped++; continue; }
-              // re-cutucada: re-posta o card inteiro no canal (encaminha/bump) com o
-              // tempo atualizado no topo e mencionando o time de novo — a mensagem
-              // ressurge no fim do canal em vez de ficar escondida numa thread.
-              const author = await authorMention(pr.user.login);
-              const desc = st.descB64 ? Buffer.from(st.descB64, 'base64').toString('utf8') : await oneLineDesc(pr);
-              const res = await slack('chat.postMessage', buildCard(pr, elapsed, desc, author));
+              // re-cutucada estilo "encaminhado": posta uma nota curta + o PERMALINK
+              // da mensagem original; o Slack desdobra (unfurl) a original embutida
+              // como citação. Mantém o ts ORIGINAL no estado (o permalink aponta pra ela).
+              const chan = st.channel || CHANNEL;
+              let permalink = pr.html_url;
+              try {
+                const plr = await fetch(`https://slack.com/api/chat.getPermalink?channel=${encodeURIComponent(chan)}&message_ts=${encodeURIComponent(st.ts)}`, { headers: { Authorization: `Bearer ${BOT}` } });
+                const pl = await plr.json();
+                if (pl.ok && pl.permalink) permalink = pl.permalink;
+                else core.warning(`getPermalink falhou: ${JSON.stringify(pl)}`);
+              } catch (e) { core.warning(`getPermalink erro: ${e.message}`); }
+              const teamPart = TEAM ? ` <!subteam^${TEAM}>` : '';
+              const res = await slack('chat.postMessage', {
+                channel: chan,
+                text: `⏰ *Ainda sem review* — PR aguardando há ${elapsed}.${teamPart}\n${permalink}`,
+                unfurl_links: true,
+              });
               if (!res.ok) continue;
               await github.rest.issues.updateComment({
                 owner, repo, comment_id: stateC.id,
-                body: `${MARKER} ts=${res.ts} channel=${res.channel || st.channel || CHANNEL} last=${nowSec} count=${st.count + 1} desc=${st.descB64} -->`,
+                body: `${MARKER} ts=${st.ts} channel=${chan} last=${nowSec} count=${st.count + 1} desc=${st.descB64} -->`,
               });
               repinged++;
               core.info(`reping PR #${pr.number} (#${st.count + 1}, ${elapsed})`);

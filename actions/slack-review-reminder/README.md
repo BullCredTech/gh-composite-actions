@@ -11,7 +11,7 @@ Roda em **schedule (cron)** e cutuca no Slack os PRs abertos parados **sem revie
 ┃ Author: @autor
 ┃ Time responsável: @time, dá uma olhada 🙏
 ```
-Re-ping (a cada `reping-every-minutes`): **re-posta o card inteiro no canal** (encaminha/bump) com o tempo atualizado no topo (`Aguardando review há 45m`) e mencionando o time de novo — ressurge no fim do canal, não fica escondido em thread.
+Re-ping (a cada `reping-every-minutes`): posta uma **nota + o permalink** da mensagem original (`⏰ Ainda sem review — PR aguardando há 45m. @time` + link), e o Slack **desdobra** a original embutida como citação — jeito "encaminhado". Ressurge no fim do canal, não fica escondido em thread.
 
 ## Quando age
 
