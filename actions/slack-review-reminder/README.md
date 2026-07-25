@@ -1,9 +1,9 @@
 # slack-review-reminder
 
-Roda em **schedule (cron)** e avisa no Slack, num **canal de aviso** (diferente do canal de PR review), sobre os PRs abertos parados **sem review**. A mensagem **já é o encaminhamento do card original** do [`slack-pr-notify`](../slack-pr-notify): posta uma nota (`⏰ PR aguardando review há 15m — ainda sem review. @time`) + o **permalink** da mensagem original, e o Slack **desdobra** o card embutido como citação. Enquanto o PR seguir sem review, re-encaminha a cada `reping-every-minutes`. Para assim que houver **qualquer review**, ou se o PR virar draft/fechar.
+Roda em **schedule (cron)** e avisa no Slack, num **canal de aviso** (diferente do canal de PR review), sobre os PRs abertos parados **sem review**. A mensagem **já é o encaminhamento do card original** do [`slack-pr-notify`](../slack-pr-notify): posta uma nota (`⏰ PR aguardando review há 15m @time`) + o **permalink** da mensagem original, e o Slack **desdobra** o card embutido como citação. Enquanto o PR seguir sem review, re-encaminha a cada `reping-every-minutes`. Para assim que houver **qualquer review**, ou se o PR virar draft/fechar.
 
 ```
-⏰ PR aguardando review há 15m — ainda sem review. @time
+⏰ PR aguardando review há 15m @time
 ┌─────────────────────────────────────────────┐   ← card original do pr-notify (unfurl)
 │ 🔵 Pull Request · Aguardando review · Author…│
 │ • <descrição> · Repositório · PR · Branch …  │

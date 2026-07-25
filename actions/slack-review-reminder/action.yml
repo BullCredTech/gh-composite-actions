@@ -245,7 +245,7 @@ runs:
                 } catch (e) { core.warning(`getPermalink erro: ${e.message}`); }
                 payload = {
                   channel: CHANNEL,
-                  text: `⏰ *PR aguardando review há ${elapsed}* — ainda sem review.${teamPart}\n${permalink}`,
+                  text: `⏰ *PR aguardando review há ${elapsed}*${teamPart}\n${permalink}`,
                   unfurl_links: true,
                 };
                 mode = 'forward';
