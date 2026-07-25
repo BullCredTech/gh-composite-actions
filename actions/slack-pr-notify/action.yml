@@ -35,10 +35,13 @@ inputs:
       e/ou nova-linha). Um check nessa lista não conta como pendente nem como
       falha — útil pra "merge gates" que falham DE PROPÓSITO (ex.: o
       weekend/holiday merge gate, org-wide) e não devem virar ❌ na notificação.
-      Não afeta o branch protection (o gate segue barrando o merge). Default já
-      inclui o gate central; o caller pode sobrescrever/estender.
+      IMPORTANTE: use o nome do CHECK-RUN, que é o nome do JOB (não do workflow)
+      — o gate org-wide tem workflow "weekend-holiday-merge-gate" mas job "gate",
+      então o check-run se chama "gate". Não afeta o branch protection (o gate
+      segue barrando o merge). Default cobre ambos os nomes; o caller pode
+      sobrescrever/estender.
     required: false
-    default: weekend-holiday-merge-gate
+    default: gate,weekend-holiday-merge-gate
   team-id:
     description: >
       ID do Slack User Group do time responsável (formato S0XXXXXXX). Setado ->
