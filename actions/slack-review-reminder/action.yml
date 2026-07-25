@@ -1,0 +1,283 @@
+name: Slack review reminder (PR sem review)
+description: >
+  Roda em schedule (cron) e cutuca no Slack os PRs abertos que estão há mais de
+  `remind-after-minutes` sem NENHUMA review. Posta um card no padrão do
+  slack-pr-notify (mesmo layout, barra âmbar, autor mencionado via user-map do
+  slack-pr-notify) e, enquanto seguir sem review, re-cutuca a cada
+  `reping-every-minutes` como RESPOSTA na thread (mencionando o time de novo).
+  Para de cutucar assim que houver qualquer review, ou se o PR virar draft/fechar.
+  Só age em horário comercial BRT (seg-sex, `business-hours-start`..`-end`),
+  pulando fim de semana e feriado nacional (BrasilAPI). Estado (ts/última
+  cutucada/contador) fica num comentário oculto do PR — por isso precisa de
+  pull-requests: write. Requer bot token + channel-id.
+
+inputs:
+  slack-bot-token:
+    description: Bot token do Slack (xoxb-...). Vazio -> sai sem falhar.
+    required: false
+    default: ""
+  channel-id:
+    description: ID do canal Slack (C0XXXX) onde postar os lembretes.
+    required: false
+    default: ""
+  team-id:
+    description: >
+      Slack User Group ID (S0XXXXXXX) do time responsável. Setado -> menciona
+      <!subteam^ID> no card e nas re-cutucadas (notifica o time). Vazio -> omite.
+    required: false
+    default: ""
+  bar-color:
+    description: Cor (hex) da barra lateral do card. Default âmbar (chama atenção sem parecer erro).
+    required: false
+    default: "#E8A317"
+  target-branches:
+    description: Bases de PR a considerar (vírgula/nova-linha, match exato). Default main.
+    required: false
+    default: main
+  remind-after-minutes:
+    description: Minutos de PR aberto sem review antes do 1º lembrete.
+    required: false
+    default: "15"
+  reping-every-minutes:
+    description: Intervalo (min) entre re-cutucadas enquanto seguir sem review.
+    required: false
+    default: "30"
+  ignore-authors:
+    description: Logins de autor a ignorar (vírgula/nova-linha). Default dependabot[bot].
+    required: false
+    default: "dependabot[bot]"
+  business-hours-start:
+    description: Hora inicial (BRT, 0-23) da janela em que cutuca. Default 9.
+    required: false
+    default: "9"
+  business-hours-end:
+    description: Hora final EXCLUSIVA (BRT, 0-23) da janela. Default 18 (cutuca até 17h59).
+    required: false
+    default: "18"
+  gemini-api-key:
+    description: API key do Google AI Studio p/ a descrição de 1 linha em PT. Vazio -> usa o título do PR.
+    required: false
+    default: ""
+  gemini-model:
+    description: Modelo do Google AI Studio.
+    required: false
+    default: gemini-2.5-flash
+
+runs:
+  using: "composite"
+  steps:
+    - name: Cutucar PRs sem review
+      uses: actions/github-script@v7
+      env:
+        SLACK_BOT_TOKEN: ${{ inputs.slack-bot-token }}
+        CHANNEL_ID: ${{ inputs.channel-id }}
+        TEAM_ID: ${{ inputs.team-id }}
+        BAR_COLOR: ${{ inputs.bar-color }}
+        TARGET_BRANCHES: ${{ inputs.target-branches }}
+        REMIND_AFTER_MINUTES: ${{ inputs.remind-after-minutes }}
+        REPING_EVERY_MINUTES: ${{ inputs.reping-every-minutes }}
+        IGNORE_AUTHORS: ${{ inputs.ignore-authors }}
+        BUSINESS_HOURS_START: ${{ inputs.business-hours-start }}
+        BUSINESS_HOURS_END: ${{ inputs.business-hours-end }}
+        GEMINI_API_KEY: ${{ inputs.gemini-api-key }}
+        GEMINI_MODEL: ${{ inputs.gemini-model }}
+      with:
+        script: |
+          const fs = require('fs');
+          const path = require('path');
+
+          const TZ = 'America/Sao_Paulo';
+          const BOT = process.env.SLACK_BOT_TOKEN || '';
+          const CHANNEL = process.env.CHANNEL_ID || '';
+          const TEAM = (process.env.TEAM_ID || '').trim();
+          const BAR = process.env.BAR_COLOR || '#E8A317';
+          const REMIND_MIN = parseInt(process.env.REMIND_AFTER_MINUTES || '15', 10);
+          const REPING_MIN = parseInt(process.env.REPING_EVERY_MINUTES || '30', 10);
+          const HSTART = parseInt(process.env.BUSINESS_HOURS_START || '9', 10);
+          const HEND = parseInt(process.env.BUSINESS_HOURS_END || '18', 10);
+          const TARGETS = (process.env.TARGET_BRANCHES || 'main').split(/[,\n\r]+/).map(s => s.trim()).filter(Boolean);
+          const IGNORE_AUTHORS = (process.env.IGNORE_AUTHORS || '').split(/[,\n\r]+/).map(s => s.trim()).filter(Boolean);
+          const GEMINI_KEY = process.env.GEMINI_API_KEY || '';
+          const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
+          const { owner, repo } = context.repo;
+          const MARKER = '<!-- slack-review-reminder:';
+
+          if (!BOT || !CHANNEL) { core.warning('sem bot token/channel — nada a fazer.'); return; }
+
+          // ---------- Gate: horário comercial BRT (seg-sex) + feriado nacional ----------
+          const now = new Date();
+          const fmtDate = d => new Intl.DateTimeFormat('en-CA', { timeZone: TZ }).format(d); // YYYY-MM-DD
+          const dow = new Intl.DateTimeFormat('en-US', { timeZone: TZ, weekday: 'short' }).format(now);
+          const hour = parseInt(new Intl.DateTimeFormat('en-US', { timeZone: TZ, hour: '2-digit', hour12: false }).format(now), 10);
+
+          if (['Sat', 'Sun'].includes(dow)) { core.info(`Fim de semana (${dow} BRT) — não cutuca.`); return; }
+          if (hour < HSTART || hour >= HEND) { core.info(`Fora do horário comercial (${hour}h BRT, janela ${HSTART}-${HEND}) — não cutuca.`); return; }
+          try {
+            const year = fmtDate(now).slice(0, 4);
+            const r = await fetch(`https://brasilapi.com.br/api/feriados/v1/${year}`);
+            if (r.ok) {
+              const holidays = (await r.json()).map(h => h.date);
+              if (holidays.includes(fmtDate(now))) { core.info(`Feriado nacional (${fmtDate(now)}) — não cutuca.`); return; }
+            } else {
+              core.warning(`Feriados HTTP ${r.status} — seguindo (fail-open, lembrete é inofensivo).`);
+            }
+          } catch (e) {
+            core.warning(`Feriados falhou (${e.message}) — seguindo (fail-open).`);
+          }
+
+          // ---------- user-map (reusa o do slack-pr-notify) ----------
+          let userMap = {};
+          const mapPath = path.join(process.env.GITHUB_ACTION_PATH, '..', 'slack-pr-notify', 'user-map.json');
+          try { userMap = JSON.parse(fs.readFileSync(mapPath, 'utf8')); }
+          catch (e) { core.warning(`user-map não lido (${mapPath}): ${e.message} — usando nome do autor.`); }
+
+          // ---------- helpers ----------
+          const humanize = m => {
+            m = Math.round(m);
+            if (m < 60) return `${m}m`;
+            const h = Math.floor(m / 60), r = m % 60;
+            return `${h}h${String(r).padStart(2, '0')}m`;
+          };
+          const slack = async (method, payload) => {
+            const r = await fetch(`https://slack.com/api/${method}`, {
+              method: 'POST',
+              headers: { 'Authorization': `Bearer ${BOT}`, 'Content-Type': 'application/json; charset=utf-8' },
+              body: JSON.stringify(payload),
+            });
+            const j = await r.json();
+            if (!j.ok) core.warning(`${method} falhou: ${JSON.stringify(j)}`);
+            return j;
+          };
+          const parseState = body => ({
+            ts: (body.match(/ts=([0-9.]+)/) || [])[1] || '',
+            channel: (body.match(/channel=([A-Za-z0-9]+)/) || [])[1] || '',
+            last: parseInt((body.match(/last=([0-9]+)/) || [])[1] || '0', 10),
+            count: parseInt((body.match(/count=([0-9]+)/) || [])[1] || '0', 10),
+            descB64: (body.match(/desc=([A-Za-z0-9+/=]*)/) || [])[1] || '',
+          });
+          const authorMention = async login => {
+            if (userMap[login]) return `<@${userMap[login]}>`;
+            try { const u = await github.rest.users.getByUsername({ username: login }); return u.data.name || login; }
+            catch { return login; }
+          };
+          const oneLineDesc = async pr => {
+            if (!GEMINI_KEY) return pr.title;
+            try {
+              const body = (pr.body || '').slice(0, 1000);
+              const prompt = `Com base no título e na descrição de um Pull Request, escreva UMA única linha curta em português (no máximo ~90 caracteres) do que o PR faz. Sem bullet, sem aspas, sem preâmbulo e SEM quebra de linha. Não invente o que não estiver no texto. Responda apenas a frase.\n\nTÍTULO: ${pr.title}\n\nDESCRIÇÃO:\n${body}`;
+              const req = { contents: [{ parts: [{ text: prompt }] }], generationConfig: { maxOutputTokens: 512, temperature: 0.2, thinkingConfig: { thinkingBudget: 0 } } };
+              const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`, {
+                method: 'POST', headers: { 'x-goog-api-key': GEMINI_KEY, 'content-type': 'application/json' }, body: JSON.stringify(req),
+              });
+              if (!r.ok) return pr.title;
+              const j = await r.json();
+              const txt = (j.candidates?.[0]?.content?.parts || []).map(p => p.text || '').join('').replace(/\s+/g, ' ').trim();
+              return txt || pr.title;
+            } catch { return pr.title; }
+          };
+          const buildCard = (pr, elapsed, desc, author) => {
+            const teamline = TEAM ? `\n*Time responsável:* <!subteam^${TEAM}>, dá uma olhada 🙏` : '';
+            return {
+              channel: CHANNEL,
+              text: `⏰ Pull Request · Aguardando review há ${elapsed}`,
+              blocks: [
+                { type: 'context', elements: [{ type: 'mrkdwn', text: '​' }] },
+                { type: 'section', text: { type: 'mrkdwn', text: `⏰ *Pull Request · Aguardando review há ${elapsed}*` } },
+              ],
+              attachments: [{
+                color: BAR,
+                blocks: [
+                  { type: 'section', text: { type: 'mrkdwn', text: `• ${desc}` } },
+                  { type: 'divider' },
+                  { type: 'section', text: { type: 'mrkdwn', text:
+                      `*Repositório:* ${repo}\n*PR:* ${pr.html_url}\n*Author:* ${author}${teamline}` } },
+                ],
+              }],
+            };
+          };
+
+          // ---------- varre PRs abertos ----------
+          const prs = await github.paginate(github.rest.pulls.list, { owner, repo, state: 'open', per_page: 100 });
+          const nowSec = Math.floor(Date.now() / 1000);
+          let pinged = 0, repinged = 0, skipped = 0;
+
+          for (const pr of prs) {
+            if (pr.draft) { skipped++; continue; }
+            if (!TARGETS.includes(pr.base.ref)) { skipped++; continue; }
+            if (IGNORE_AUTHORS.includes(pr.user.login)) { skipped++; continue; }
+            if (pr.head.ref === 'main' && pr.base.ref === 'staging') { skipped++; continue; } // sync bot
+
+            // qualquer review (aprovou / pediu mudança / comentou) -> a bola voltou pro autor, para de cutucar
+            const reviews = await github.paginate(github.rest.pulls.listReviews, { owner, repo, pull_number: pr.number, per_page: 100 });
+            if (reviews.length > 0) { skipped++; continue; }
+
+            const ageMin = (Date.now() - new Date(pr.created_at).getTime()) / 60000;
+            if (ageMin < REMIND_MIN) { skipped++; continue; }
+
+            // comentários do PR: estado do lembrete + card original do pr-notify
+            const comments = await github.paginate(github.rest.issues.listComments, { owner, repo, issue_number: pr.number, per_page: 100 });
+            const stateC = comments.filter(c => c.body && c.body.includes(MARKER)).pop();
+            const notifyC = comments.filter(c => c.body && c.body.includes('<!-- slack-pr-notify:')).pop();
+            const elapsed = humanize(ageMin);
+
+            // gate de repetição: 1ª vez sempre; depois só a cada REPING_MIN
+            const st = stateC ? parseState(stateC.body) : null;
+            if (st && (nowSec - st.last) / 60 < REPING_MIN) { skipped++; continue; }
+
+            if (!stateC) {
+              // 1º aviso: mensagem NOVA no canal = encaminhamento do card do
+              // pr-notify (nota "aguardando há X" + permalink; o Slack desdobra o
+              // card embutido). Sem card do pr-notify guardado (ainda não postado /
+              // modo webhook), cai no fallback de um card próprio pra não deixar de avisar.
+              const teamPart = TEAM ? ` <!subteam^${TEAM}>` : '';
+              let payload = null;
+              let mode = 'card';
+              if (notifyC) {
+                const oTs = (notifyC.body.match(/ts=([0-9.]+)/) || [])[1];
+                const oCh = (notifyC.body.match(/channel=([A-Za-z0-9]+)/) || [])[1] || CHANNEL;
+                if (oTs) {
+                  let permalink = pr.html_url;
+                  try {
+                    const plr = await fetch(`https://slack.com/api/chat.getPermalink?channel=${encodeURIComponent(oCh)}&message_ts=${encodeURIComponent(oTs)}`, { headers: { Authorization: `Bearer ${BOT}` } });
+                    const pl = await plr.json();
+                    if (pl.ok && pl.permalink) permalink = pl.permalink;
+                    else core.warning(`getPermalink falhou: ${JSON.stringify(pl)}`);
+                  } catch (e) { core.warning(`getPermalink erro: ${e.message}`); }
+                  payload = { channel: CHANNEL, text: `⏰ *PR aguardando review há ${elapsed}*${teamPart}\n${permalink}`, unfurl_links: true };
+                  mode = 'forward';
+                }
+              }
+              if (!payload) {
+                const author = await authorMention(pr.user.login);
+                const desc = await oneLineDesc(pr);
+                payload = buildCard(pr, elapsed, desc, author);
+              }
+              const res = await slack('chat.postMessage', payload);
+              if (!res.ok) continue;
+              // guarda ts+canal do 1º aviso pros re-avisos responderem NA THREAD dele
+              await github.rest.issues.createComment({
+                owner, repo, issue_number: pr.number,
+                body: `${MARKER} ts=${res.ts} channel=${res.channel || CHANNEL} last=${nowSec} count=1 -->`,
+              });
+              pinged++;
+              core.info(`ping PR #${pr.number} (${elapsed}, mode=${mode})`);
+            } else {
+              // re-aviso: resposta NA THREAD do 1º aviso, marcando o time (notifica
+              // os membros) mas SEM broadcast — não repete o card, não polui o canal.
+              const teamPart = TEAM ? ` <!subteam^${TEAM}>` : '';
+              const res = await slack('chat.postMessage', {
+                channel: st.channel || CHANNEL,
+                thread_ts: st.ts,
+                text: `⏰ *PR aguardando review há ${elapsed}*${teamPart}`,
+              });
+              if (!res.ok) continue;
+              await github.rest.issues.updateComment({
+                owner, repo, comment_id: stateC.id,
+                body: `${MARKER} ts=${st.ts} channel=${st.channel || CHANNEL} last=${nowSec} count=${st.count + 1} -->`,
+              });
+              repinged++;
+              core.info(`reping PR #${pr.number} (#${st.count + 1}, ${elapsed}, thread)`);
+            }
+          }
+
+          core.info(`Resumo: ${pinged} ping(s), ${repinged} reping(s), ${skipped} ignorado(s) de ${prs.length} PR(s) abertos.`);
