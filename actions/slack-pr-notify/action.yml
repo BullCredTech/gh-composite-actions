@@ -536,6 +536,20 @@ runs:
             failure)      FE="❌"; FL="Checks falharam"; FC="#D64545" ;;
             *)            echo "::warning::timeout — card permanece em 'Aguardando checks'."; exit 0 ;;
           esac
+          # Trava de estado TERMINAL: se o PR foi mergeado/fechado enquanto
+          # esperávamos os checks (ex.: merge sem aguardar a CI), o run do evento
+          # `closed` já editou o card pra 🟢 Mergeado / 🔴 Fechado. NÃO rebaixa —
+          # 'Mergeado'/'Fechado' é final. Re-checa o estado real do PR antes de editar.
+          if [ -n "${PR_NUMBER:-}" ]; then
+            pr_now=$(curl -sS -H "Authorization: Bearer ${GITHUB_TOKEN}" -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/${REPO}/pulls/${PR_NUMBER}" 2>/dev/null || echo '{}')
+            merged_now=$(printf '%s' "$pr_now" | jq -r '.merged // false')
+            state_now=$(printf '%s' "$pr_now" | jq -r '.state // ""')
+            if [ "$merged_now" = "true" ] || [ "$state_now" = "closed" ]; then
+              echo "::notice::PR #${PR_NUMBER} já terminal (merged=$merged_now state=$state_now) — mantém o card e não rebaixa pós-checks."
+              exit 0
+            fi
+          fi
           upd=$(emit_card "$FE" "$FL" "$FC" | jq --arg ch "$CH" --arg ts "$TS" '. + {channel: $ch, ts: $ts}')
           code=$(curl -sS -o /tmp/slack_upd.json -w "%{http_code}" \
             -X POST -H "Authorization: Bearer ${SLACK_BOT_TOKEN}" \
