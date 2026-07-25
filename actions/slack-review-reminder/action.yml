@@ -134,9 +134,9 @@ runs:
           // ---------- helpers ----------
           const humanize = m => {
             m = Math.round(m);
-            if (m < 60) return `${m} min`;
+            if (m < 60) return `${m}m`;
             const h = Math.floor(m / 60), r = m % 60;
-            return r ? `${h}h${String(r).padStart(2, '0')}` : `${h}h`;
+            return `${h}h${String(r).padStart(2, '0')}m`;
           };
           const slack = async (method, payload) => {
             const r = await fetch(`https://slack.com/api/${method}`, {
@@ -236,18 +236,16 @@ runs:
               const st = parseState(stateC.body);
               const sinceLastMin = (nowSec - st.last) / 60;
               if (sinceLastMin < REPING_MIN) { skipped++; continue; }
-              // re-cutucada: resposta na thread, mencionando o time de novo, e visível no canal
-              const teamPart = TEAM ? ` <!subteam^${TEAM}>` : '';
-              const res = await slack('chat.postMessage', {
-                channel: st.channel || CHANNEL,
-                thread_ts: st.ts,
-                reply_broadcast: true,
-                text: `⏰ Ainda sem review. PR aguardando há ${elapsed}.${teamPart}`,
-              });
+              // re-cutucada: re-posta o card inteiro no canal (encaminha/bump) com o
+              // tempo atualizado no topo e mencionando o time de novo — a mensagem
+              // ressurge no fim do canal em vez de ficar escondida numa thread.
+              const author = await authorMention(pr.user.login);
+              const desc = st.descB64 ? Buffer.from(st.descB64, 'base64').toString('utf8') : await oneLineDesc(pr);
+              const res = await slack('chat.postMessage', buildCard(pr, elapsed, desc, author));
               if (!res.ok) continue;
               await github.rest.issues.updateComment({
                 owner, repo, comment_id: stateC.id,
-                body: `${MARKER} ts=${st.ts} channel=${st.channel || CHANNEL} last=${nowSec} count=${st.count + 1} desc=${st.descB64} -->`,
+                body: `${MARKER} ts=${res.ts} channel=${res.channel || st.channel || CHANNEL} last=${nowSec} count=${st.count + 1} desc=${st.descB64} -->`,
               });
               repinged++;
               core.info(`reping PR #${pr.number} (#${st.count + 1}, ${elapsed})`);

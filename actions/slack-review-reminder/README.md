@@ -3,7 +3,7 @@
 Roda em **schedule (cron)** e cutuca no Slack os PRs abertos parados **sem review**. Posta um card no mesmo padrão do [`slack-pr-notify`](../slack-pr-notify) (barra âmbar, autor **mencionado de verdade** via `user-map.json`) e, enquanto o PR seguir sem review, **re-cutuca a cada X min** como resposta na thread (mencionando o time de novo). Para assim que houver **qualquer review**, ou se o PR virar draft/fechar.
 
 ```
-⏰ Pull Request · Aguardando review há 15 min          ← 1º ping (mensagem nova)
+⏰ Pull Request · Aguardando review há 15m           ← 1º ping (mensagem nova)
 ┃ • <descrição de 1 linha em PT (Gemini; fallback = título)>
 ┃ ──────────────
 ┃ Repositório: <repo>
@@ -11,7 +11,7 @@ Roda em **schedule (cron)** e cutuca no Slack os PRs abertos parados **sem revie
 ┃ Author: @autor
 ┃ Time responsável: @time, dá uma olhada 🙏
 ```
-Re-ping (resposta na thread, visível no canal): `@time ⏰ ainda sem review — já são 45 min 🙏`
+Re-ping (a cada `reping-every-minutes`): **re-posta o card inteiro no canal** (encaminha/bump) com o tempo atualizado no topo (`Aguardando review há 45m`) e mencionando o time de novo — ressurge no fim do canal, não fica escondido em thread.
 
 ## Quando age
 
