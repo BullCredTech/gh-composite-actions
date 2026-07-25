@@ -237,12 +237,12 @@ runs:
               const sinceLastMin = (nowSec - st.last) / 60;
               if (sinceLastMin < REPING_MIN) { skipped++; continue; }
               // re-cutucada: resposta na thread, mencionando o time de novo, e visível no canal
-              const teamPart = TEAM ? `<!subteam^${TEAM}> ` : '';
+              const teamPart = TEAM ? ` <!subteam^${TEAM}>` : '';
               const res = await slack('chat.postMessage', {
                 channel: st.channel || CHANNEL,
                 thread_ts: st.ts,
                 reply_broadcast: true,
-                text: `${teamPart}⏰ ainda sem review — já são ${elapsed} 🙏`,
+                text: `⏰ Ainda sem review. PR aguardando há ${elapsed}.${teamPart}`,
               });
               if (!res.ok) continue;
               await github.rest.issues.updateComment({
