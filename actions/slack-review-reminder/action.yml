@@ -264,11 +264,11 @@ runs:
             } else {
               // re-aviso: resposta NA THREAD do 1º aviso, marcando o time (notifica
               // os membros) mas SEM broadcast — não repete o card, não polui o canal.
-              const teamPart = TEAM ? `<!subteam^${TEAM}> ` : '';
+              const teamPart = TEAM ? ` <!subteam^${TEAM}>` : '';
               const res = await slack('chat.postMessage', {
                 channel: st.channel || CHANNEL,
                 thread_ts: st.ts,
-                text: `${teamPart}⏰ PR aguardando review — já são ${elapsed} sem review 🙏`,
+                text: `⏰ *PR aguardando review há ${elapsed}*${teamPart}`,
               });
               if (!res.ok) continue;
               await github.rest.issues.updateComment({

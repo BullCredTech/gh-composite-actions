@@ -12,7 +12,7 @@ Roda em **schedule (cron)** e avisa no Slack, num **canal de aviso** (diferente 
 │ 🔵 Pull Request · Aguardando review · Author…│
 │ • <descrição> · Repositório · PR · Branch …  │
 └─────────────────────────────────────────────┘
-  └─ @time ⏰ PR aguardando review — já são 45m…  ← re-avisos (na thread, marcam o time)
+  └─ ⏰ PR aguardando review há 45m @time          ← re-avisos (na thread, marcam o time)
 ```
 
 > ⚠️ **Cross-channel:** como o card original vive no canal de PR review, o preview embutido só renderiza pra quem é **membro daquele canal**. Se a audiência do canal de aviso não estiver no canal de review, ela vê só o link. Requer também que o `slack-pr-notify` (modo bot token) esteja **ativo** no repo — senão não há card pra encaminhar. **Fallback:** sem card original guardado, o lembrete posta um card próprio (barra âmbar, autor via `user-map.json`) pra não deixar de avisar.
