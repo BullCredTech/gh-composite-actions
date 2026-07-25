@@ -46,7 +46,7 @@ Só em **horário comercial BRT**, seg–sex, dentro de `business-hours-start`..
 
 ## Estado
 
-Guarda `ts` + última cutucada + contador num **comentário oculto do PR** (`<!-- slack-review-reminder: ... -->`) — por isso o caller precisa de `pull-requests: write`. Usa o `GITHUB_TOKEN` do próprio repo (varre só os PRs dele), então **não precisa de token cross-repo**: é um workflow por repo.
+Guarda última cutucada + contador num **comentário oculto do PR** (`<!-- slack-review-reminder: ... -->`) — por isso o caller precisa de `pull-requests: write`. O `ts`/canal do card a encaminhar vêm do comentário do `slack-pr-notify`. Usa o `GITHUB_TOKEN` do próprio repo (varre só os PRs dele), então **não precisa de token cross-repo**: é um workflow por repo.
 
 ## Uso (caller)
 
