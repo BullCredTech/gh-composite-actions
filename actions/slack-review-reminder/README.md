@@ -1,17 +1,16 @@
 # slack-review-reminder
 
-Roda em **schedule (cron)** e cutuca no Slack os PRs abertos parados **sem review**. Posta um card no mesmo padrão do [`slack-pr-notify`](../slack-pr-notify) (barra âmbar, autor **mencionado de verdade** via `user-map.json`) e, enquanto o PR seguir sem review, **re-cutuca a cada X min** como resposta na thread (mencionando o time de novo). Para assim que houver **qualquer review**, ou se o PR virar draft/fechar.
+Roda em **schedule (cron)** e avisa no Slack, num **canal de aviso** (diferente do canal de PR review), sobre os PRs abertos parados **sem review**. A mensagem **já é o encaminhamento do card original** do [`slack-pr-notify`](../slack-pr-notify): posta uma nota (`⏰ PR aguardando review há 15m — ainda sem review. @time`) + o **permalink** da mensagem original, e o Slack **desdobra** o card embutido como citação. Enquanto o PR seguir sem review, re-encaminha a cada `reping-every-minutes`. Para assim que houver **qualquer review**, ou se o PR virar draft/fechar.
 
 ```
-⏰ Pull Request · Aguardando review há 15m           ← 1º ping (mensagem nova)
-┃ • <descrição de 1 linha em PT (Gemini; fallback = título)>
-┃ ──────────────
-┃ Repositório: <repo>
-┃ PR: <link>
-┃ Author: @autor
-┃ Time responsável: @time, dá uma olhada 🙏
+⏰ PR aguardando review há 15m — ainda sem review. @time
+┌─────────────────────────────────────────────┐   ← card original do pr-notify (unfurl)
+│ 🔵 Pull Request · Aguardando review · Author…│
+│ • <descrição> · Repositório · PR · Branch …  │
+└─────────────────────────────────────────────┘
 ```
-Re-ping (a cada `reping-every-minutes`): posta uma **nota + o permalink** da mensagem original (`⏰ Ainda sem review — PR aguardando há 45m. @time` + link), e o Slack **desdobra** a original embutida como citação — jeito "encaminhado". Ressurge no fim do canal, não fica escondido em thread.
+
+> ⚠️ **Cross-channel:** como o card original vive no canal de PR review, o preview embutido só renderiza pra quem é **membro daquele canal**. Se a audiência do canal de aviso não estiver no canal de review, ela vê só o link. Requer também que o `slack-pr-notify` (modo bot token) esteja **ativo** no repo — senão não há card pra encaminhar. **Fallback:** sem card original guardado, o lembrete posta um card próprio (barra âmbar, autor via `user-map.json`) pra não deixar de avisar.
 
 ## Quando age
 

@@ -214,52 +214,66 @@ runs:
             const ageMin = (Date.now() - new Date(pr.created_at).getTime()) / 60000;
             if (ageMin < REMIND_MIN) { skipped++; continue; }
 
-            // estado anterior (comentário oculto)
+            // comentários do PR: estado do lembrete + card original do pr-notify
             const comments = await github.paginate(github.rest.issues.listComments, { owner, repo, issue_number: pr.number, per_page: 100 });
             const stateC = comments.filter(c => c.body && c.body.includes(MARKER)).pop();
+            const notifyC = comments.filter(c => c.body && c.body.includes('<!-- slack-pr-notify:')).pop();
             const elapsed = humanize(ageMin);
 
-            if (!stateC) {
-              // 1º ping — card completo
+            // gate de repetição: 1ª vez sempre; depois só a cada REPING_MIN
+            const st = stateC ? parseState(stateC.body) : null;
+            if (st && (nowSec - st.last) / 60 < REPING_MIN) { skipped++; continue; }
+
+            // A mensagem JÁ É o encaminhamento do card original do pr-notify:
+            // nota "aguardando há X" + o permalink da mensagem original (o Slack
+            // desdobra o card embutido). Se o PR não tiver card do pr-notify
+            // guardado (ainda não postado / modo webhook), cai no fallback de um
+            // card próprio pra não deixar de avisar.
+            const teamPart = TEAM ? ` <!subteam^${TEAM}>` : '';
+            let payload = null;
+            let mode = 'card';
+            if (notifyC) {
+              const oTs = (notifyC.body.match(/ts=([0-9.]+)/) || [])[1];
+              const oCh = (notifyC.body.match(/channel=([A-Za-z0-9]+)/) || [])[1] || CHANNEL;
+              if (oTs) {
+                let permalink = pr.html_url;
+                try {
+                  const plr = await fetch(`https://slack.com/api/chat.getPermalink?channel=${encodeURIComponent(oCh)}&message_ts=${encodeURIComponent(oTs)}`, { headers: { Authorization: `Bearer ${BOT}` } });
+                  const pl = await plr.json();
+                  if (pl.ok && pl.permalink) permalink = pl.permalink;
+                  else core.warning(`getPermalink falhou: ${JSON.stringify(pl)}`);
+                } catch (e) { core.warning(`getPermalink erro: ${e.message}`); }
+                payload = {
+                  channel: CHANNEL,
+                  text: `⏰ *PR aguardando review há ${elapsed}* — ainda sem review.${teamPart}\n${permalink}`,
+                  unfurl_links: true,
+                };
+                mode = 'forward';
+              }
+            }
+            if (!payload) {
               const author = await authorMention(pr.user.login);
               const desc = await oneLineDesc(pr);
-              const res = await slack('chat.postMessage', buildCard(pr, elapsed, desc, author));
-              if (!res.ok) continue;
-              const descB64 = Buffer.from(desc).toString('base64');
+              payload = buildCard(pr, elapsed, desc, author);
+            }
+
+            const res = await slack('chat.postMessage', payload);
+            if (!res.ok) continue;
+
+            if (!stateC) {
               await github.rest.issues.createComment({
                 owner, repo, issue_number: pr.number,
-                body: `${MARKER} ts=${res.ts} channel=${res.channel} last=${nowSec} count=1 desc=${descB64} -->`,
+                body: `${MARKER} last=${nowSec} count=1 -->`,
               });
               pinged++;
-              core.info(`ping PR #${pr.number} (${elapsed})`);
+              core.info(`ping PR #${pr.number} (${elapsed}, mode=${mode})`);
             } else {
-              const st = parseState(stateC.body);
-              const sinceLastMin = (nowSec - st.last) / 60;
-              if (sinceLastMin < REPING_MIN) { skipped++; continue; }
-              // re-cutucada estilo "encaminhado": posta uma nota curta + o PERMALINK
-              // da mensagem original; o Slack desdobra (unfurl) a original embutida
-              // como citação. Mantém o ts ORIGINAL no estado (o permalink aponta pra ela).
-              const chan = st.channel || CHANNEL;
-              let permalink = pr.html_url;
-              try {
-                const plr = await fetch(`https://slack.com/api/chat.getPermalink?channel=${encodeURIComponent(chan)}&message_ts=${encodeURIComponent(st.ts)}`, { headers: { Authorization: `Bearer ${BOT}` } });
-                const pl = await plr.json();
-                if (pl.ok && pl.permalink) permalink = pl.permalink;
-                else core.warning(`getPermalink falhou: ${JSON.stringify(pl)}`);
-              } catch (e) { core.warning(`getPermalink erro: ${e.message}`); }
-              const teamPart = TEAM ? ` <!subteam^${TEAM}>` : '';
-              const res = await slack('chat.postMessage', {
-                channel: chan,
-                text: `⏰ *Ainda sem review* — PR aguardando há ${elapsed}.${teamPart}\n${permalink}`,
-                unfurl_links: true,
-              });
-              if (!res.ok) continue;
               await github.rest.issues.updateComment({
                 owner, repo, comment_id: stateC.id,
-                body: `${MARKER} ts=${st.ts} channel=${chan} last=${nowSec} count=${st.count + 1} desc=${st.descB64} -->`,
+                body: `${MARKER} last=${nowSec} count=${st.count + 1} -->`,
               });
               repinged++;
-              core.info(`reping PR #${pr.number} (#${st.count + 1}, ${elapsed})`);
+              core.info(`reping PR #${pr.number} (#${st.count + 1}, ${elapsed}, mode=${mode})`);
             }
           }
 
