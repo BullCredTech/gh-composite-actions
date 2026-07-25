@@ -6,10 +6,10 @@ Roda em **schedule (cron)** e cutuca no Slack os PRs abertos parados **sem revie
 ⏰ Pull Request · Aguardando review há 15 min          ← 1º ping (mensagem nova)
 ┃ • <descrição de 1 linha em PT (Gemini; fallback = título)>
 ┃ ──────────────
-┃ 📌 PR: <link>
-┃ 📦 Repositório: <repo>
-┃ 🌿 Branch: <head> → <base>
-┃ 👥 Time responsável: @time, dá uma olhada 🙏
+┃ Repositório: <repo>
+┃ PR: <link>
+┃ Author: @autor
+┃ Time responsável: @time, dá uma olhada 🙏
 ```
 Re-ping (resposta na thread, visível no canal): `@time ⏰ ainda sem review — já são 45 min 🙏`
 

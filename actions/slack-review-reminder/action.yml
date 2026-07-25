@@ -182,7 +182,7 @@ runs:
               text: `⏰ Pull Request · Aguardando review há ${elapsed}`,
               blocks: [
                 { type: 'context', elements: [{ type: 'mrkdwn', text: '​' }] },
-                { type: 'section', text: { type: 'mrkdwn', text: `⏰ *Pull Request · Aguardando review há ${elapsed} · Author: ${author}*` } },
+                { type: 'section', text: { type: 'mrkdwn', text: `⏰ *Pull Request · Aguardando review há ${elapsed}*` } },
               ],
               attachments: [{
                 color: BAR,
@@ -190,7 +190,7 @@ runs:
                   { type: 'section', text: { type: 'mrkdwn', text: `• ${desc}` } },
                   { type: 'divider' },
                   { type: 'section', text: { type: 'mrkdwn', text:
-                      `*Repositório:* ${repo}\n*PR:* ${pr.html_url}\n*Branch:* \`${pr.head.ref}\` → \`${pr.base.ref}\`${teamline}` } },
+                      `*Repositório:* ${repo}\n*PR:* ${pr.html_url}\n*Author:* ${author}${teamline}` } },
                 ],
               }],
             };
