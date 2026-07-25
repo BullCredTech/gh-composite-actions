@@ -1,13 +1,18 @@
 # slack-review-reminder
 
-Roda em **schedule (cron)** e avisa no Slack, num **canal de aviso** (diferente do canal de PR review), sobre os PRs abertos parados **sem review**. A mensagem **já é o encaminhamento do card original** do [`slack-pr-notify`](../slack-pr-notify): posta uma nota (`⏰ PR aguardando review há 15m @time`) + o **permalink** da mensagem original, e o Slack **desdobra** o card embutido como citação. Enquanto o PR seguir sem review, re-encaminha a cada `reping-every-minutes`. Para assim que houver **qualquer review**, ou se o PR virar draft/fechar.
+Roda em **schedule (cron)** e avisa no Slack, num **canal de aviso** (diferente do canal de PR review), sobre os PRs abertos parados **sem review**.
+
+- **1º aviso** (aos `remind-after-minutes`): mensagem **nova no canal**, que **já é o encaminhamento do card original** do [`slack-pr-notify`](../slack-pr-notify) — nota (`⏰ PR aguardando review há 15m @time`) + o **permalink** da mensagem original, e o Slack **desdobra** o card embutido como citação.
+- **Re-aviso** (a cada `reping-every-minutes`, enquanto sem review): **resposta na thread** do 1º aviso, **marcando o time** (notifica os membros) mas **sem broadcast** — não repete o card nem polui o canal.
+- **Para** assim que houver **qualquer review**, ou se o PR virar draft/fechar.
 
 ```
-⏰ PR aguardando review há 15m @time
+⏰ PR aguardando review há 15m @time                ← 1º aviso (no canal)
 ┌─────────────────────────────────────────────┐   ← card original do pr-notify (unfurl)
 │ 🔵 Pull Request · Aguardando review · Author…│
 │ • <descrição> · Repositório · PR · Branch …  │
 └─────────────────────────────────────────────┘
+  └─ @time ⏰ PR aguardando review — já são 45m…  ← re-avisos (na thread, marcam o time)
 ```
 
 > ⚠️ **Cross-channel:** como o card original vive no canal de PR review, o preview embutido só renderiza pra quem é **membro daquele canal**. Se a audiência do canal de aviso não estiver no canal de review, ela vê só o link. Requer também que o `slack-pr-notify` (modo bot token) esteja **ativo** no repo — senão não há card pra encaminhar. **Fallback:** sem card original guardado, o lembrete posta um card próprio (barra âmbar, autor via `user-map.json`) pra não deixar de avisar.
