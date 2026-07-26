@@ -29,6 +29,7 @@ Só em **horário comercial BRT**, seg–sex, dentro de `business-hours-start`..
 - PR de sync `main → staging` (bull-sync-bot)
 - PR que **já tem qualquer review** (aprovado / mudanças pedidas / comentado)
 - PR aberto há menos de `remind-after-minutes`
+- PR aberto **antes de 26/07/2026** — corte de adoção, chumbado na action (ver abaixo)
 
 ## Inputs
 
@@ -75,5 +76,17 @@ jobs:
           team-id: S0XXXXXXXXX
           gemini-api-key: ${{ secrets.GEMINI_API_KEY }}
 ```
+
+> **Corte de adoção — `2026-07-26`, chumbado na action.** PR aberto antes dessa data
+> nunca é cutucado. Não é input: a constante `ONLY_AFTER` está no script e vale igual
+> pra todos os repos que consomem a action. Pra mudar, edita aqui.
+>
+> **Por que existe:** PR antigo sem review não tem o comentário de estado, e o gate de
+> re-cutucada só se aplica quando esse comentário existe. Sem o corte, a primeira
+> execução num repo com backlog manda o 1º aviso de **todos** de uma vez.
+>
+> **Limitação:** é corte fixo, não "anda" com o tempo. Ele resolve a adoção, mas daqui
+> uns meses não protege de PR novo que ficar esquecido — esse vai ser cutucado
+> indefinidamente. Pra isso o filtro certo seria teto de idade, que a action não tem.
 
 > O cron do GitHub Actions pode **atrasar** sob carga e **desliga após 60 dias** sem commit no repo. Pra um lembrete é tolerável; se precisar de precisão, migrar pra EventBridge + Lambda.

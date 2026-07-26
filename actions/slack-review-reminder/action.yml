@@ -93,6 +93,13 @@ runs:
           const BAR = process.env.BAR_COLOR || '#E8A317';
           const REMIND_MIN = parseInt(process.env.REMIND_AFTER_MINUTES || '15', 10);
           const REPING_MIN = parseInt(process.env.REPING_EVERY_MINUTES || '30', 10);
+          // Corte de adoção, fixo: PR aberto antes disso nunca é cutucado. Existe pra
+          // não despejar o backlog no canal quando a action entra num repo — PR antigo
+          // sem review não tem comentário de estado, então cairia todo no 1º aviso de
+          // uma vez. É data chumbada de propósito (não é input): o corte vale igual em
+          // todos os repos que consomem a action. Não "anda" com o tempo — pra ignorar
+          // PR esquecido daqui pra frente o filtro certo seria teto de idade.
+          const ONLY_AFTER = Date.parse('2026-07-26T00:00:00Z');
           const HSTART = parseInt(process.env.BUSINESS_HOURS_START || '9', 10);
           const HEND = parseInt(process.env.BUSINESS_HOURS_END || '18', 10);
           const TARGETS = (process.env.TARGET_BRANCHES || 'main').split(/[,\n\r]+/).map(s => s.trim()).filter(Boolean);
@@ -211,7 +218,10 @@ runs:
             const reviews = await github.paginate(github.rest.pulls.listReviews, { owner, repo, pull_number: pr.number, per_page: 100 });
             if (reviews.length > 0) { skipped++; continue; }
 
-            const ageMin = (Date.now() - new Date(pr.created_at).getTime()) / 60000;
+            const createdAt = new Date(pr.created_at).getTime();
+            if (createdAt < ONLY_AFTER) { skipped++; continue; }
+
+            const ageMin = (Date.now() - createdAt) / 60000;
             if (ageMin < REMIND_MIN) { skipped++; continue; }
 
             // comentários do PR: estado do lembrete + card original do pr-notify
