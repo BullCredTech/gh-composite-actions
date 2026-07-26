@@ -4,7 +4,7 @@ description: >
   com barra colorida. Fora do card (negrito): "Pull Request · Author: <autor>",
   com o autor mencionado (@) via user-map.json (fallback = nome do perfil
   GitHub). Dentro: descrição de 1 linha em PT gerada pelo Gemini (fallback =
-  título do PR), link do PR, repositório, branch e menção ao time responsável.
+  título do PR), link do PR, repositório e menção ao time responsável.
   Só notifica PRs cuja base esteja em `target-branches` (default: main) e, por
   padrão, só depois que TODOS os checks do commit concluírem com sucesso
   (`wait-for-checks`). Lê os dados do PR do contexto
@@ -122,7 +122,6 @@ runs:
         PR_URL: ${{ github.event.pull_request.html_url }}
         PR_AUTHOR: ${{ github.event.pull_request.user.login }}
         PR_BASE: ${{ github.event.pull_request.base.ref }}
-        PR_HEAD: ${{ github.event.pull_request.head.ref }}
         PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         PR_DRAFT: ${{ github.event.pull_request.draft }}
         PR_NUMBER: ${{ github.event.pull_request.number }}
@@ -161,8 +160,10 @@ runs:
           repo_short=$(printf '%s' "$REPO" | awk -F/ '{print $NF}')
           upd=$(jq -n \
             --arg ch "$MSG_CH" --arg ts "$MSG_TS" --arg author "$MSG_AUTHOR" --arg desc "$MSG_DESC" \
-            --arg url "$PR_URL" --arg repo "$repo_short" --arg head "$PR_HEAD" --arg base "$PR_BASE" \
-            '{ channel: $ch, ts: $ts, text: "🟡 Pull Request · Aprovado",
+            --arg url "$PR_URL" --arg repo "$repo_short" --arg team "${TEAM_ID:-}" \
+            '($team | gsub("^\\s+|\\s+$"; "")) as $t |
+             (if ($t | length) == 0 then "" else "\n*Time responsável:* <!subteam^" + $t + ">" end) as $teamline |
+             { channel: $ch, ts: $ts, text: "🟡 Pull Request · Aprovado",
                blocks: [
                  { type: "context", elements: [ { type: "mrkdwn", text: "​" } ] },
                  { type: "section", text: { type: "mrkdwn", text: ("🟡 *Pull Request · Aprovado · Aguardando merge · Author: " + $author + "*") } }
@@ -174,8 +175,8 @@ runs:
                    { type: "divider" },
                    { type: "section", text: { type: "mrkdwn", text: (
                        "*Repositório:* " + $repo + "\n" +
-                       "*PR:* " + $url + "\n" +
-                       "*Branch:* `" + $head + "` → `" + $base + "`") } }
+                       "*PR:* " + $url +
+                       $teamline ) } }
                  ]
                } ] }')
           code=$(curl -sS -o /tmp/slack_upd.json -w "%{http_code}" \
@@ -228,9 +229,10 @@ runs:
             --arg ch "$MSG_CH" --arg ts "$MSG_TS" \
             --arg author "$MSG_AUTHOR" --arg desc "$MSG_DESC" \
             --arg emoji "$ST_EMOJI" --arg label "$ST_LABEL" --arg color "$ST_COLOR" \
-            --arg url "$PR_URL" --arg repo "$repo_short" \
-            --arg head "$PR_HEAD" --arg base "$PR_BASE" \
-            '{ channel: $ch, ts: $ts, text: ($emoji + " Pull Request · " + $label),
+            --arg url "$PR_URL" --arg repo "$repo_short" --arg team "${TEAM_ID:-}" \
+            '($team | gsub("^\\s+|\\s+$"; "")) as $t |
+             (if ($t | length) == 0 then "" else "\n*Time responsável:* <!subteam^" + $t + ">" end) as $teamline |
+             { channel: $ch, ts: $ts, text: ($emoji + " Pull Request · " + $label),
                blocks: [
                  { type: "context", elements: [ { type: "mrkdwn", text: "​" } ] },
                  { type: "section", text: { type: "mrkdwn", text: ($emoji + " *Pull Request · " + $label + " · Author: " + $author + "*") } }
@@ -242,8 +244,8 @@ runs:
                    { type: "divider" },
                    { type: "section", text: { type: "mrkdwn", text: (
                        "*Repositório:* " + $repo + "\n" +
-                       "*PR:* " + $url + "\n" +
-                       "*Branch:* `" + $head + "` → `" + $base + "`") } }
+                       "*PR:* " + $url +
+                       $teamline ) } }
                  ]
                } ] }')
           code=$(curl -sS -o /tmp/slack_upd.json -w "%{http_code}" \
@@ -436,7 +438,7 @@ runs:
           jq -n \
             --arg emoji "$1" --arg label "$2" --arg color "$3" \
             --arg author "$AUTHOR" --arg desc "$DESC" \
-            --arg url "$PR_URL" --arg base "$PR_BASE" --arg head "$PR_HEAD" \
+            --arg url "$PR_URL" \
             --arg repo "$REPO" --arg team "${TEAM_ID:-}" \
             '($team | gsub("^\\s+|\\s+$"; "")) as $t |
              ($repo | split("/") | last) as $repo_short |
@@ -454,8 +456,7 @@ runs:
                    { type: "divider" },
                    { type: "section", text: { type: "mrkdwn", text: (
                        "*Repositório:* " + $repo_short + "\n" +
-                       "*PR:* " + $url + "\n" +
-                       "*Branch:* `" + $head + "` → `" + $base + "`" +
+                       "*PR:* " + $url +
                        $teamline ) } }
                  ]
                } ]
