@@ -50,9 +50,9 @@ inputs:
     required: false
     default: ""
   bar-color:
-    description: Cor (hex) da barra lateral do card no Slack.
+    description: Cor (hex) da barra lateral do card no Slack (estado "Aguardando review").
     required: false
-    default: "#4A90D9"
+    default: "#d4a72c"
   gemini-api-key:
     description: API key do Google AI Studio para gerar a descrição de 1 linha em PT. Vazio -> usa o título do PR.
     required: false
@@ -163,13 +163,13 @@ runs:
             --arg url "$PR_URL" --arg repo "$repo_short" --arg team "${TEAM_ID:-}" \
             '($team | gsub("^\\s+|\\s+$"; "")) as $t |
              (if ($t | length) == 0 then "" else "\n*Time responsável:* <!subteam^" + $t + ">" end) as $teamline |
-             { channel: $ch, ts: $ts, text: "🟡 Pull Request · Aprovado",
+             { channel: $ch, ts: $ts, text: "🔵 Pull Request · Aprovado",
                blocks: [
                  { type: "context", elements: [ { type: "mrkdwn", text: "​" } ] },
-                 { type: "section", text: { type: "mrkdwn", text: ("🟡 *Pull Request · Aprovado · Aguardando merge · Author: " + $author + "*") } }
+                 { type: "section", text: { type: "mrkdwn", text: ("🔵 *Pull Request · Aprovado · Aguardando merge · Author: " + $author + "*") } }
                ],
                attachments: [ {
-                 color: "#d4a72c",
+                 color: "#4A90D9",
                  blocks: [
                    { type: "section", text: { type: "mrkdwn", text: ("• " + $desc) } },
                    { type: "divider" },
@@ -473,7 +473,7 @@ runs:
           elif [ "$WAIT" = "true" ]; then
             IE="🟠"; IL="Aguardando checks"; IC="#d29922"
           else
-            IE="🔵"; IL="Aguardando review"; IC="$BAR_COLOR"
+            IE="🟡"; IL="Aguardando review"; IC="$BAR_COLOR"
           fi
           card=$(emit_card "$IE" "$IL" "$IC")
 
@@ -533,7 +533,7 @@ runs:
           # Espera os checks e edita conforme o desfecho.
           wait_checks
           case "$CHECKS_RESULT" in
-            success|none) FE="🔵"; FL="Aguardando review"; FC="$BAR_COLOR" ;;
+            success|none) FE="🟡"; FL="Aguardando review"; FC="$BAR_COLOR" ;;
             failure)      FE="❌"; FL="Checks falharam"; FC="#D64545" ;;
             *)            echo "::warning::timeout — card permanece em 'Aguardando checks'."; exit 0 ;;
           esac
@@ -563,7 +563,7 @@ runs:
         fi
 
         # ===== Modo webhook (legado): espera checks e posta 1x (sem edição) =====
-        E="🔵"; L="Aguardando review"; C="$BAR_COLOR"
+        E="🟡"; L="Aguardando review"; C="$BAR_COLOR"
         if [ "$PR_DRAFT" = "true" ]; then
           E="⚪"; L="Draft"; C="#8b949e"
         elif [ "$WAIT" = "true" ]; then
