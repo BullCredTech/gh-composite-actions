@@ -2,17 +2,17 @@
 
 Roda em **schedule (cron)** e avisa no Slack, num **canal de aviso** (diferente do canal de PR review), sobre os PRs abertos parados **sem review**.
 
-- **1º aviso** (aos `remind-after-minutes`): mensagem **nova no canal**, que **já é o encaminhamento do card original** do [`slack-pr-notify`](../slack-pr-notify) — nota (`⏰ PR aguardando review há 15m @time`) + o **permalink** da mensagem original, e o Slack **desdobra** o card embutido como citação.
+- **1º aviso** (aos `remind-after-minutes`): mensagem **nova no canal**, que **já é o encaminhamento do card original** do [`slack-pr-notify`](../slack-pr-notify) — nota (`⏰ PR aguardando review há 30m @time`) + o **permalink** da mensagem original, e o Slack **desdobra** o card embutido como citação.
 - **Re-aviso** (a cada `reping-every-minutes`, enquanto sem review): **resposta na thread** do 1º aviso, **marcando o time** (notifica os membros) mas **sem broadcast** — não repete o card nem polui o canal.
 - **Para** assim que houver **qualquer review**, ou se o PR virar draft/fechar.
 
 ```
-⏰ PR aguardando review há 15m @time                ← 1º aviso (no canal)
+⏰ PR aguardando review há 30m @time                ← 1º aviso (no canal)
 ┌─────────────────────────────────────────────┐   ← card original do pr-notify (unfurl)
 │ 🔵 Pull Request · Aguardando review · Author…│
 │ • <descrição> · Repositório · PR · Branch …  │
 └─────────────────────────────────────────────┘
-  └─ ⏰ PR aguardando review há 45m @time          ← re-avisos (na thread, marcam o time)
+  └─ ⏰ PR aguardando review há 1h30 @time         ← re-avisos (na thread, marcam o time)
 ```
 
 > ⚠️ **Cross-channel:** como o card original vive no canal de PR review, o preview embutido só renderiza pra quem é **membro daquele canal**. Se a audiência do canal de aviso não estiver no canal de review, ela vê só o link. Requer também que o `slack-pr-notify` (modo bot token) esteja **ativo** no repo — senão não há card pra encaminhar. **Fallback:** sem card original guardado, o lembrete posta um card próprio (barra âmbar, autor via `user-map.json`) pra não deixar de avisar.
@@ -40,8 +40,8 @@ Só em **horário comercial BRT**, seg–sex, dentro de `business-hours-start`..
 | `team-id` | não | `""` | User Group (`S0XXXXXXX`) mencionado no card e nas re-cutucadas. Vazio → omite. |
 | `bar-color` | não | `#E8A317` | Cor da barra (âmbar). |
 | `target-branches` | não | `main` | Bases de PR a considerar (vírgula/nova-linha, match exato). |
-| `remind-after-minutes` | não | `15` | Minutos sem review antes do 1º lembrete. |
-| `reping-every-minutes` | não | `30` | Intervalo entre re-cutucadas. |
+| `remind-after-minutes` | não | `30` | Minutos sem review antes do 1º lembrete. |
+| `reping-every-minutes` | não | `60` | Intervalo entre re-cutucadas. |
 | `ignore-authors` | não | `dependabot[bot]` | Logins a ignorar (vírgula/nova-linha). |
 | `business-hours-start` | não | `9` | Hora inicial (BRT, inclusiva). |
 | `business-hours-end` | não | `18` | Hora final (BRT, **exclusiva** — cutuca até 17h59). |
