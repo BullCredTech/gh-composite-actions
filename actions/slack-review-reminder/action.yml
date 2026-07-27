@@ -37,11 +37,11 @@ inputs:
   remind-after-minutes:
     description: Minutos de PR aberto sem review antes do 1º lembrete.
     required: false
-    default: "30"
+    default: "15"
   reping-every-minutes:
     description: Intervalo (min) entre re-cutucadas enquanto seguir sem review.
     required: false
-    default: "60"
+    default: "30"
   ignore-authors:
     description: Logins de autor a ignorar (vírgula/nova-linha). Default dependabot[bot].
     required: false
@@ -91,8 +91,8 @@ runs:
           const CHANNEL = process.env.CHANNEL_ID || '';
           const TEAM = (process.env.TEAM_ID || '').trim();
           const BAR = process.env.BAR_COLOR || '#E8A317';
-          const REMIND_MIN = parseInt(process.env.REMIND_AFTER_MINUTES || '30', 10);
-          const REPING_MIN = parseInt(process.env.REPING_EVERY_MINUTES || '60', 10);
+          const REMIND_MIN = parseInt(process.env.REMIND_AFTER_MINUTES || '15', 10);
+          const REPING_MIN = parseInt(process.env.REPING_EVERY_MINUTES || '30', 10);
           // Corte de adoção, fixo: PR aberto antes disso nunca é cutucado. Existe pra
           // não despejar o backlog no canal quando a action entra num repo — PR antigo
           // sem review não tem comentário de estado, então cairia todo no 1º aviso de
