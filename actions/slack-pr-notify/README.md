@@ -62,7 +62,7 @@ Com `wait-for-checks: true` (default), o card abre em **🟠 Aguardando checks**
 
 Pra isso o caller precisa:
 
-- disparar em **`pull_request`** (`types: [opened, reopened, synchronize, closed]`) **e** em **`pull_request_review`** (`types: [submitted]`);
+- disparar em **`pull_request`** (`types: [opened, reopened, synchronize, closed, ready_for_review, converted_to_draft]`) **e** em **`pull_request_review`** (`types: [submitted]`) — **`ready_for_review` e `converted_to_draft` são obrigatórios**: sem eles, marcar o PR como pronto (ou devolvê-lo a draft) não dispara run nenhum e o card fica travado no estado anterior;
 - permissão **`pull-requests: write`** (pra gravar/ler o `ts` no comentário oculto);
 - passar `slack-bot-token` + `channel-id`.
 
@@ -70,7 +70,7 @@ Pra isso o caller precisa:
 name: Notify Slack on PR
 on:
   pull_request:
-    types: [opened, reopened, synchronize, closed]
+    types: [opened, reopened, synchronize, closed, ready_for_review, converted_to_draft]
   pull_request_review:
     types: [submitted]         # edita pra "aprovado" quando aprovarem
 permissions:
