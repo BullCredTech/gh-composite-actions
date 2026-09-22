@@ -14,12 +14,13 @@ Ao **abrir um PR**, posta uma notificação no Slack (via Incoming Webhook) num 
 ```
 (`┃` = a barra colorida)
 
-Só notifica quando **duas condições** são satisfeitas:
+Só notifica quando **três condições** são satisfeitas:
 
 1. **Branch de destino**: a base do PR está em `target-branches` (default: `main`). PR para outra branch → sai sem notificar.
-2. **Checks concluídos** (quando `wait-for-checks: true`, o default): a action faz *poll* de todos os check-runs e commit statuses do commit (head SHA) — **ignorando o próprio check run** do workflow de notificação — e só posta quando **todos passaram**. Se algum falhar, fica em silêncio (a menos que `notify-on-failure: true`).
+2. **PR não está em draft**: draft é rascunho — sai sem notificar. A notificação começa quando o PR é marcado como pronto (evento `ready_for_review`), que posta o card do zero.
+3. **Checks concluídos** (quando `wait-for-checks: true`, o default): a action faz *poll* de todos os check-runs e commit statuses do commit (head SHA) — **ignorando o próprio check run** do workflow de notificação — e só posta quando **todos passaram**. Se algum falhar, fica em silêncio (a menos que `notify-on-failure: true`).
 
-O cabeçalho reflete o resultado: `✅ Pull Request — checks OK`, `❌ Pull Request — checks falharam`, `⏰ Pull Request (Draft)` ou `🔔 Pull Request` (quando `wait-for-checks: false`).
+O cabeçalho reflete o resultado: `✅ Pull Request — checks OK`, `❌ Pull Request — checks falharam` ou `🔔 Pull Request` (quando `wait-for-checks: false`).
 
 Lê os dados do PR do contexto `github.event.pull_request`, então o workflow que chama **precisa rodar em `on: pull_request`**.
 
@@ -28,7 +29,7 @@ Lê os dados do PR do contexto `github.event.pull_request`, então o workflow qu
 | Input | Obrigatório | Default | Descrição |
 |-------|-------------|---------|-----------|
 | `slack-webhook-url` | não* | `""` | Incoming Webhook do canal. Vazio → o job sai sem falhar (falha fechada). |
-| `slack-bot-token` | não* | `""` | Bot token (`xoxb-...`). Presente → posta via `chat.postMessage`, guarda o `ts` num comentário oculto do PR e **edita a mensagem** conforme o PR evolui (Draft ⚪ → Aguardando review 🟡 → Aprovado 🔵 → Mergeado 🟢 / Fechado 🔴). Requer `channel-id` + eventos `closed`/`pull_request_review` no caller. Ausente → usa o webhook (sem edição). |
+| `slack-bot-token` | não* | `""` | Bot token (`xoxb-...`). Presente → posta via `chat.postMessage`, guarda o `ts` num comentário oculto do PR e **edita a mensagem** conforme o PR evolui (Aguardando checks 🟠 → Aguardando review 🟡 → Aprovado 🔵 → Mergeado 🟢 / Fechado 🔴). Requer `channel-id` + eventos `closed`/`pull_request_review` no caller. Ausente → usa o webhook (sem edição). |
 | `channel-id` | não* | `""` | ID do canal (`C0XXXX`) para o `chat.postMessage`. Obrigatório com `slack-bot-token`. |
 | `ignore-checks` | não | `gate,weekend-holiday-merge-gate` | Nomes de check-runs a **ignorar** na espera/decisão (vírgula/nova-linha). Não contam como pendente nem falha — útil pra "merge gates" que falham de propósito (não viram ❌ na notificação). **Use o nome do check-run = nome do JOB** (não do workflow): o gate org-wide tem workflow `weekend-holiday-merge-gate` mas job `gate`, então o check-run é `gate`. Não afeta o branch protection. Default cobre ambos. |
 | `team-id` | não | `""` | Slack User Group ID (`S0XXXXXXX`). Setado → menção `<!subteam^ID>` que **notifica** o time. Vazio → linha omitida. |
@@ -50,7 +51,6 @@ Com `slack-bot-token` + `channel-id`, a action posta via `chat.postMessage` e gu
 
 | Estado | Card | Barra |
 |--------|------|-------|
-| Draft | ⚪ `Pull Request · Draft · Author: …` | cinza |
 | Aguardando checks | 🟠 `Pull Request · Aguardando checks · Author: …` | laranja |
 | Aguardando review (checks ok) | 🟡 `Pull Request · Aguardando review · Author: …` | amarela |
 | Checks falharam | ❌ `Pull Request · Checks falharam · Author: …` | vermelha |
@@ -62,7 +62,7 @@ Com `wait-for-checks: true` (default), o card abre em **🟠 Aguardando checks**
 
 Pra isso o caller precisa:
 
-- disparar em **`pull_request`** (`types: [opened, reopened, synchronize, closed, ready_for_review, converted_to_draft]`) **e** em **`pull_request_review`** (`types: [submitted]`) — **`ready_for_review` e `converted_to_draft` são obrigatórios**: sem eles, marcar o PR como pronto (ou devolvê-lo a draft) não dispara run nenhum e o card fica travado no estado anterior;
+- disparar em **`pull_request`** (`types: [opened, reopened, synchronize, closed, ready_for_review]`) **e** em **`pull_request_review`** (`types: [submitted]`) — **`ready_for_review` é obrigatório**: é ele que anuncia o PR que nasceu draft; sem ele, marcar o PR como pronto não dispara run nenhum e o PR nunca aparece no canal. `converted_to_draft` virou opcional — o run dispara e sai sem fazer nada. Um PR aberto pronto e devolvido a draft mantém o card no último estado vivo até fechar;
 - permissão **`pull-requests: write`** (pra gravar/ler o `ts` no comentário oculto);
 - passar `slack-bot-token` + `channel-id`.
 
@@ -70,7 +70,7 @@ Pra isso o caller precisa:
 name: Notify Slack on PR
 on:
   pull_request:
-    types: [opened, reopened, synchronize, closed, ready_for_review, converted_to_draft]
+    types: [opened, reopened, synchronize, closed, ready_for_review]
   pull_request_review:
     types: [submitted]         # edita pra "aprovado" quando aprovarem
 permissions:
