@@ -264,6 +264,21 @@ runs:
           exit 0
         fi
 
+        # ---------- PR em draft não notifica ----------
+        # Draft é rascunho: quem abre ainda não está pedindo nada de ninguém, e o card
+        # cinza só ocupava o canal até virar "pronto". A notificação começa no
+        # `ready_for_review` — que posta o card do zero, porque sem run anterior não há
+        # `ts` guardado no PR.
+        # Os ramos `pull_request_review` e `closed` ficam ACIMA desta guarda de
+        # propósito: os dois apenas EDITAM um card existente. Assim, um PR aberto pronto
+        # e devolvido a draft ainda resolve pra 🟢/🔴 quando fecha, em vez de ficar
+        # parado em "Aguardando review" pra sempre. Draft que nunca foi anunciado não
+        # tem `ts` guardado, e esses ramos saem sozinhos sem postar nada.
+        if [ "${PR_DRAFT:-}" = "true" ]; then
+          echo "::notice::PR #${PR_NUMBER} está em draft — não notifica."
+          exit 0
+        fi
+
         # ---------- Filtro de branch de destino (base do PR) ----------
         # Só notifica PRs cuja base esteja em TARGET_BRANCHES (default: main).
         # Aceita vírgula e/ou nova-linha como separador; match exato.
@@ -468,9 +483,7 @@ runs:
         if [ -n "${SLACK_BOT_TOKEN:-}" ] && [ -n "${CHANNEL_ID:-}" ]; then
           # ===== Modo bot token: posta e depois EDITA a mesma mensagem =====
           # Estado inicial:
-          if [ "$PR_DRAFT" = "true" ]; then
-            IE="⚪"; IL="Draft"; IC="#8b949e"
-          elif [ "$WAIT" = "true" ]; then
+          if [ "$WAIT" = "true" ]; then
             IE="🟠"; IL="Aguardando checks"; IC="#d29922"
           else
             IE="🟡"; IL="Aguardando review"; IC="$BAR_COLOR"
@@ -527,8 +540,8 @@ runs:
             fi
           fi
 
-          # Draft não espera checks; sem wait já postou "Aguardando review".
-          if [ "$PR_DRAFT" = "true" ] || [ "$WAIT" != "true" ]; then exit 0; fi
+          # Sem wait, o card já nasceu em "Aguardando review" — nada a editar depois.
+          if [ "$WAIT" != "true" ]; then exit 0; fi
 
           # Espera os checks e edita conforme o desfecho.
           wait_checks
@@ -564,9 +577,7 @@ runs:
 
         # ===== Modo webhook (legado): espera checks e posta 1x (sem edição) =====
         E="🟡"; L="Aguardando review"; C="$BAR_COLOR"
-        if [ "$PR_DRAFT" = "true" ]; then
-          E="⚪"; L="Draft"; C="#8b949e"
-        elif [ "$WAIT" = "true" ]; then
+        if [ "$WAIT" = "true" ]; then
           wait_checks
           case "$CHECKS_RESULT" in
             failure)
