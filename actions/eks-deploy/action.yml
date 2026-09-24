@@ -83,6 +83,16 @@ inputs:
   release:
     description: Helm release name.
     required: true
+  deployment-name:
+    description: >
+      Nome do Deployment a aguardar no `rollout status`. Por padrão usa
+      `release`, que vale quando o chart nomeia o Deployment com o nome do
+      release. Charts que usam o helper `fullname` padrão do Helm geram
+      `<release>-<chart>` — e aí o rollout procura um Deployment que não
+      existe, falhando com `NotFound` DEPOIS de o Helm ter aplicado tudo com
+      sucesso. O efeito é o pior possível: deploy saudável, workflow vermelho.
+    required: false
+    default: ""
   chart-path:
     description: Path to the Helm chart directory.
     required: true
@@ -318,9 +328,11 @@ runs:
 
     - name: Wait for rollout
       shell: bash
+      env:
+        DEPLOYMENT_NAME: ${{ inputs.deployment-name || inputs.release }}
       run: |
         kubectl -n "${{ inputs.namespace }}" rollout status \
-          deploy/"${{ inputs.release }}" \
+          deploy/"${DEPLOYMENT_NAME}" \
           --timeout="${{ inputs.timeout }}"
 
     - name: Write GitHub Actions job summary
