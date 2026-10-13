@@ -83,6 +83,10 @@ inputs:
   release:
     description: Helm release name.
     required: true
+  deployment-name:
+    description: Name of the Deployment to wait on and describe. Defaults to `release`; set it when the chart names resources `<release>-<chart>` (e.g. release and chart both `bull-tracking` yield `bull-tracking-bull-tracking`).
+    required: false
+    default: ""
   chart-path:
     description: Path to the Helm chart directory.
     required: true
@@ -320,7 +324,7 @@ runs:
       shell: bash
       run: |
         kubectl -n "${{ inputs.namespace }}" rollout status \
-          deploy/"${{ inputs.release }}" \
+          deploy/"${{ inputs.deployment-name || inputs.release }}" \
           --timeout="${{ inputs.timeout }}"
 
     - name: Write GitHub Actions job summary
@@ -354,6 +358,7 @@ runs:
       env:
         NS: ${{ inputs.namespace }}
         REL: ${{ inputs.release }}
+        DEPLOY: ${{ inputs.deployment-name || inputs.release }}
       run: |
         set +e
         echo "::group::helm history"
@@ -373,8 +378,8 @@ runs:
         kubectl get externalsecret,secret,configmap -n "$NS" || true
         echo "::endgroup::"
 
-        echo "::group::describe deployment $REL"
-        kubectl describe deployment "$REL" -n "$NS" || true
+        echo "::group::describe deployment $DEPLOY"
+        kubectl describe deployment "$DEPLOY" -n "$NS" || true
         echo "::endgroup::"
 
         echo "::group::kubectl describe pods (release=$REL)"
