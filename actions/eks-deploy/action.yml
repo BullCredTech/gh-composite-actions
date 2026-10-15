@@ -127,6 +127,18 @@ inputs:
       (image URI, `<environment>-latest` floating tag when building, cluster, namespace, release).
     required: false
     default: "true"
+  tag-deployed-image:
+    description: >-
+      After a successful rollout, add the tag `deployed-tag` to the image that was deployed,
+      so ECR lifecycle policies can protect what is actually running. `<environment>-latest`
+      is set at build time, before the deploy, and does not mark the running image.
+      Skipped when the image is not in ECR.
+    required: false
+    default: "true"
+  deployed-tag:
+    description: Tag added to the deployed image. Defaults to `<environment>-deployed`.
+    required: false
+    default: ""
 
 outputs:
   image-uri:
@@ -398,3 +410,56 @@ runs:
         echo "::group::namespace events (sorted)"
         kubectl get events -n "$NS" --sort-by=.lastTimestamp | tail -n 80 || true
         echo "::endgroup::"
+
+    # Runs last, after the diagnostics step, so a failure here never runs the
+    # kubectl diagnostics with the ECR credentials below.
+    - name: Configure AWS credentials (OIDC) to tag the deployed image
+      if: ${{ success() && inputs.tag-deployed-image == 'true' }}
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        role-to-assume: ${{ inputs.aws-role-arn != '' && inputs.aws-role-arn || inputs.ecr-role-arn }}
+        role-session-name: ${{ inputs.ecr-role-session-name }}
+        aws-region: ${{ inputs.aws-region }}
+
+    - name: Tag the deployed image in ECR
+      if: ${{ success() && inputs.tag-deployed-image == 'true' }}
+      shell: bash
+      env:
+        REPO: ${{ steps.helm-repo.outputs.repo }}
+        TAG: ${{ steps.primary-tag.outputs.tag }}
+        DEPLOYED_TAG: ${{ inputs.deployed-tag != '' && inputs.deployed-tag || format('{0}-deployed', inputs.environment) }}
+      run: |
+        set -euo pipefail
+        host="${REPO%%/*}"
+        name="${REPO#*/}"
+        if [[ ! "$host" =~ ^([0-9]{12})\.dkr\.ecr\.([a-z0-9-]+)\.amazonaws\.com$ ]]; then
+          echo "::notice::${REPO} is not an ECR repository; skipping ${DEPLOYED_TAG}"
+          exit 0
+        fi
+        registry_id="${BASH_REMATCH[1]}"
+        region="${BASH_REMATCH[2]}"
+        common=(--region "$region" --registry-id "$registry_id" --repository-name "$name")
+        types=(application/vnd.oci.image.index.v1+json
+               application/vnd.oci.image.manifest.v1+json
+               application/vnd.docker.distribution.manifest.list.v2+json
+               application/vnd.docker.distribution.manifest.v2+json)
+        get=(aws ecr batch-get-image "${common[@]}" --image-ids imageTag="$TAG" --accepted-media-types "${types[@]}")
+        manifest="$("${get[@]}" --query 'images[0].imageManifest' --output text)"
+        media="$("${get[@]}" --query 'images[0].imageManifestMediaType' --output text)"
+        digest="$("${get[@]}" --query 'images[0].imageId.imageDigest' --output text)"
+        if [ -z "$manifest" ] || [ "$manifest" = "None" ]; then
+          echo "::error::deploy OK, but ${name}:${TAG} was not found in ECR to add ${DEPLOYED_TAG}"
+          exit 1
+        fi
+        # --image-digest makes ECR reject the call instead of creating a new
+        # image if the manifest text changed on the way through the CLI.
+        if ! err="$(aws ecr put-image "${common[@]}" --image-tag "$DEPLOYED_TAG" --image-digest "$digest" \
+                     --image-manifest "$manifest" --image-manifest-media-type "$media" 2>&1 >/dev/null)"; then
+          if [[ "$err" == *ImageAlreadyExistsException* ]]; then
+            echo "${name}:${TAG} already has ${DEPLOYED_TAG}"
+            exit 0
+          fi
+          echo "::error::deploy OK, but tagging ${name}:${TAG} as ${DEPLOYED_TAG} failed: ${err}"
+          exit 1
+        fi
+        echo "Tagged ${name}:${TAG} (${digest}) as ${DEPLOYED_TAG}"

@@ -1,6 +1,6 @@
 # eks-deploy
 
-Composite action: optionally **build and push** to Amazon ECR (always adds floating tag **`<environment>-latest`**, e.g. `staging-latest`), then **Helm upgrade --install** on EKS with `kubectl` rollout wait and optional failure diagnostics.
+Composite action: optionally **build and push** to Amazon ECR (always adds floating tag **`<environment>-latest`**, e.g. `staging-latest`), then **Helm upgrade --install** on EKS with `kubectl` rollout wait and optional failure diagnostics. After a successful rollout, it tags the deployed image as **`<environment>-deployed`** (see [Deployed tag](#deployed-tag)).
 
 This replaces the former **`helm-deploy-eks`** action (renamed and extended). For **Helm-only** deploys (image already in ECR), set **`skip-ecr-build: true`** and pass **`image-repository`** + **`image-tag`**.
 
@@ -56,6 +56,17 @@ The IAM role used for EKS must be allowed by an EKS Access Entry (or `aws-auth`)
 | `wait` | no | `true` | `--wait` when not atomic. |
 | `diagnostics-on-failure` | no | `true` | Print diagnostics on failure. |
 | `job-summary` | no | `true` | After a successful rollout, append a Markdown block to **`$GITHUB_STEP_SUMMARY`** (image, floating `<environment>-latest` tag when building, cluster, namespace, release). |
+
+### Deployed tag
+
+| Input | Required | Default | Description |
+|-------|----------|---------|-------------|
+| `tag-deployed-image` | no | `true` | After a successful rollout, add `deployed-tag` to the image that was deployed. Skipped when the image is not in ECR. |
+| `deployed-tag` | no | `<environment>-deployed` | Tag added to the deployed image, e.g. `production-deployed`. |
+
+`<environment>-latest` is set at **build** time, before the deploy. If the deploy fails or waits for an approval, it points to an image that never ran, and the running image loses it. `<environment>-deployed` is set only after `kubectl rollout status` succeeds, so it always marks the running image. ECR lifecycle policies should protect `<environment>-deployed`, not `<environment>-latest`.
+
+The tag is added with `ecr:BatchGetImage` + `ecr:PutImage` (same manifest, same digest; `--image-digest` makes ECR reject the call if the manifest changed), using the ECR role (`aws-role-arn` when set, otherwise `ecr-role-arn`). In Helm-only mode, set `environment` to the real environment, or the tag will be `staging-deployed`. A manual `helm rollback` does not move the tag.
 
 When **not** skipping ECR build, **`image.repository`** and **`image.tag`** are set from `ecr-registry` / `ecr-repository` and the resolved primary tag.
 
