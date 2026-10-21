@@ -4,7 +4,7 @@ Ao **abrir um PR**, posta uma notificação no Slack (via Incoming Webhook) num 
 
 ```
 ✅ Pull Request — checks OK              ← fora do card (negrito) + preview da notificação
-┃ • <descrição de 1 linha em PT (Gemini; fallback = título do PR)>
+┃ • <título do PR>
 ┃ ──────────────
 ┃ 📌 PR: <link>
 ┃ 📦 Repositório: <repo>
@@ -34,8 +34,6 @@ Lê os dados do PR do contexto `github.event.pull_request`, então o workflow qu
 | `ignore-checks` | não | `gate,weekend-holiday-merge-gate` | Nomes de check-runs a **ignorar** na espera/decisão (vírgula/nova-linha). Não contam como pendente nem falha — útil pra "merge gates" que falham de propósito (não viram ❌ na notificação). **Use o nome do check-run = nome do JOB** (não do workflow): o gate org-wide tem workflow `weekend-holiday-merge-gate` mas job `gate`, então o check-run é `gate`. Não afeta o branch protection. Default cobre ambos. |
 | `team-id` | não | `""` | Slack User Group ID (`S0XXXXXXX`). Setado → menção `<!subteam^ID>` que **notifica** o time. Vazio → linha omitida. |
 | `bar-color` | não | `#d4a72c` | Cor (hex) da barra lateral do card. Em falha de checks, usa vermelho automaticamente. |
-| `gemini-api-key` | não | `""` | API key do Google AI Studio para a descrição de 1 linha em PT. Vazio → usa o título do PR. |
-| `gemini-model` | não | `gemini-2.5-flash` | Modelo do Google AI Studio. |
 | `target-branches` | não | `main` | Branches de destino (base do PR) que disparam notificação, separadas por vírgula e/ou nova-linha. Match exato. Base fora da lista → não notifica. |
 | `wait-for-checks` | não | `true` | `true` → espera **todos** os checks do commit concluírem e só notifica se todos passarem. `false` → notifica na hora que o PR abre (comportamento antigo). |
 | `checks-timeout` | não | `1800` | Tempo máximo (s) aguardando os checks. Estourou → sai sem notificar (falha fechada). |
@@ -87,7 +85,6 @@ jobs:
         with:
           slack-bot-token: ${{ secrets.SLACK_BOT_TOKEN }}
           channel-id: ${{ vars.SLACK_PR_CHANNEL_ID }}
-          gemini-api-key: ${{ secrets.GEMINI_API_KEY }}
           team-id: S0AT0TS4QTD
 ```
 
@@ -112,7 +109,6 @@ jobs:
       - uses: BullCredTech/gh-composite-actions/actions/slack-pr-notify@v1.5.0
         with:
           slack-webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
-          gemini-api-key: ${{ secrets.GEMINI_API_KEY }}
           team-id: S0AT0TS4QTD   # frontend-team (backend-team = S0AT79KD1PC)
           # target-branches: main        # default; use "main,develop" p/ mais de uma
           # wait-for-checks: "true"      # default; "false" volta ao comportamento antigo
@@ -126,7 +122,7 @@ jobs:
   - **Timeout**: se estourar `checks-timeout` com checks ainda pendentes, **não notifica** (falha fechada) — melhor não anunciar "verde" sem confirmar.
   - **Sem checks**: se após `checks-initial-grace` não existir nenhum check para o commit, notifica assim mesmo (não há o que aguardar).
   - **Permissões**: requer `checks: read` e `statuses: read` no caller (além de `contents: read`).
-- A descrição é **1 linha em PT gerada pelo Gemini** (título + descrição do PR); **fallback = título** se a IA falhar ou faltar a chave.
+- A descrição é o **título do PR**.
 - **Aberto por** usa o **nome do perfil GitHub** (`.name` via API pública `/users/{login}`), com **fallback pro login**. Usa o `github.token` só pra evitar rate limit.
 - A **barra colorida** usa `attachments`; por causa disso o Slack mostra um rótulo automático "Adicionado por \<app\>" no rodapé (atribuição do app do webhook — não removível pelo webhook).
 - **Falha fechada**: sem `slack-webhook-url` sai sem erro.

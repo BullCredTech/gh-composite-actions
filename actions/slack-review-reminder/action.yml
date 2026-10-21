@@ -54,14 +54,6 @@ inputs:
     description: Hora final EXCLUSIVA (BRT, 0-23) da janela. Default 18 (cutuca até 17h59).
     required: false
     default: "18"
-  gemini-api-key:
-    description: API key do Google AI Studio p/ a descrição de 1 linha em PT. Vazio -> usa o título do PR.
-    required: false
-    default: ""
-  gemini-model:
-    description: Modelo do Google AI Studio.
-    required: false
-    default: gemini-2.5-flash
 
 runs:
   using: "composite"
@@ -79,8 +71,6 @@ runs:
         IGNORE_AUTHORS: ${{ inputs.ignore-authors }}
         BUSINESS_HOURS_START: ${{ inputs.business-hours-start }}
         BUSINESS_HOURS_END: ${{ inputs.business-hours-end }}
-        GEMINI_API_KEY: ${{ inputs.gemini-api-key }}
-        GEMINI_MODEL: ${{ inputs.gemini-model }}
       with:
         script: |
           const fs = require('fs');
@@ -104,8 +94,6 @@ runs:
           const HEND = parseInt(process.env.BUSINESS_HOURS_END || '18', 10);
           const TARGETS = (process.env.TARGET_BRANCHES || 'main').split(/[,\n\r]+/).map(s => s.trim()).filter(Boolean);
           const IGNORE_AUTHORS = (process.env.IGNORE_AUTHORS || '').split(/[,\n\r]+/).map(s => s.trim()).filter(Boolean);
-          const GEMINI_KEY = process.env.GEMINI_API_KEY || '';
-          const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
           const { owner, repo } = context.repo;
           const MARKER = '<!-- slack-review-reminder:';
 
@@ -166,21 +154,6 @@ runs:
             if (userMap[login]) return `<@${userMap[login]}>`;
             try { const u = await github.rest.users.getByUsername({ username: login }); return u.data.name || login; }
             catch { return login; }
-          };
-          const oneLineDesc = async pr => {
-            if (!GEMINI_KEY) return pr.title;
-            try {
-              const body = (pr.body || '').slice(0, 1000);
-              const prompt = `Com base no título e na descrição de um Pull Request, escreva UMA única linha curta em português (no máximo ~90 caracteres) do que o PR faz. Sem bullet, sem aspas, sem preâmbulo e SEM quebra de linha. Não invente o que não estiver no texto. Responda apenas a frase.\n\nTÍTULO: ${pr.title}\n\nDESCRIÇÃO:\n${body}`;
-              const req = { contents: [{ parts: [{ text: prompt }] }], generationConfig: { maxOutputTokens: 512, temperature: 0.2, thinkingConfig: { thinkingBudget: 0 } } };
-              const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`, {
-                method: 'POST', headers: { 'x-goog-api-key': GEMINI_KEY, 'content-type': 'application/json' }, body: JSON.stringify(req),
-              });
-              if (!r.ok) return pr.title;
-              const j = await r.json();
-              const txt = (j.candidates?.[0]?.content?.parts || []).map(p => p.text || '').join('').replace(/\s+/g, ' ').trim();
-              return txt || pr.title;
-            } catch { return pr.title; }
           };
           const buildCard = (pr, elapsed, desc, author) => {
             const teamline = TEAM ? `\n*Time responsável:* <!subteam^${TEAM}>, dá uma olhada 🙏` : '';
@@ -259,8 +232,7 @@ runs:
               }
               if (!payload) {
                 const author = await authorMention(pr.user.login);
-                const desc = await oneLineDesc(pr);
-                payload = buildCard(pr, elapsed, desc, author);
+                payload = buildCard(pr, elapsed, pr.title, author);
               }
               const res = await slack('chat.postMessage', payload);
               if (!res.ok) continue;
