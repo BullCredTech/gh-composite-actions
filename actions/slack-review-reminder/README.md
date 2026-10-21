@@ -10,7 +10,7 @@ Roda em **schedule (cron)** e avisa no Slack, num **canal de aviso** (diferente 
 ⏰ PR aguardando review há 30m @time                ← 1º aviso (no canal)
 ┌─────────────────────────────────────────────┐   ← card original do pr-notify (unfurl)
 │ 🔵 Pull Request · Aguardando review · Author…│
-│ • <descrição> · Repositório · PR · Branch …  │
+│ • <título do PR> · Repositório · PR · Branch …  │
 └─────────────────────────────────────────────┘
   └─ ⏰ PR aguardando review há 1h30 @time         ← re-avisos (na thread, marcam o time)
 ```
@@ -45,8 +45,6 @@ Só em **horário comercial BRT**, seg–sex, dentro de `business-hours-start`..
 | `ignore-authors` | não | `dependabot[bot]` | Logins a ignorar (vírgula/nova-linha). |
 | `business-hours-start` | não | `9` | Hora inicial (BRT, inclusiva). |
 | `business-hours-end` | não | `18` | Hora final (BRT, **exclusiva** — cutuca até 17h59). |
-| `gemini-api-key` | não | `""` | Descrição de 1 linha em PT. Vazio → usa o título. |
-| `gemini-model` | não | `gemini-2.5-flash` | Modelo do Google AI Studio. |
 
 \* Sem `slack-bot-token`/`channel-id` a action não faz nada (não quebra).
 
@@ -74,7 +72,6 @@ jobs:
           slack-bot-token: ${{ secrets.SLACK_BOT_TOKEN }}
           channel-id: C0XXXXXXXXX
           team-id: S0XXXXXXXXX
-          gemini-api-key: ${{ secrets.GEMINI_API_KEY }}
 ```
 
 > **Corte de adoção — `2026-07-26`, chumbado na action.** PR aberto antes dessa data

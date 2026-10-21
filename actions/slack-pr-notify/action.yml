@@ -3,8 +3,8 @@ description: >
   Ao abrir um PR, posta no Slack (Incoming Webhook) uma notificação em "ficha"
   com barra colorida. Fora do card (negrito): "Pull Request · Author: <autor>",
   com o autor mencionado (@) via user-map.json (fallback = nome do perfil
-  GitHub). Dentro: descrição de 1 linha em PT gerada pelo Gemini (fallback =
-  título do PR), link do PR, repositório e menção ao time responsável.
+  GitHub). Dentro: título do PR, link do PR, repositório e menção ao time
+  responsável.
   Só notifica PRs cuja base esteja em `target-branches` (default: main) e, por
   padrão, só depois que TODOS os checks do commit concluírem com sucesso
   (`wait-for-checks`). Lê os dados do PR do contexto
@@ -53,14 +53,6 @@ inputs:
     description: Cor (hex) da barra lateral do card no Slack (estado "Aguardando review").
     required: false
     default: "#d4a72c"
-  gemini-api-key:
-    description: API key do Google AI Studio para gerar a descrição de 1 linha em PT. Vazio -> usa o título do PR.
-    required: false
-    default: ""
-  gemini-model:
-    description: Modelo do Google AI Studio.
-    required: false
-    default: gemini-2.5-flash
   target-branches:
     description: >
       Branches de destino (base do PR) para as quais notificar, separadas por
@@ -108,8 +100,6 @@ runs:
         IGNORE_CHECKS: ${{ inputs.ignore-checks }}
         TEAM_ID: ${{ inputs.team-id }}
         BAR_COLOR: ${{ inputs.bar-color }}
-        GEMINI_API_KEY: ${{ inputs.gemini-api-key }}
-        GEMINI_MODEL: ${{ inputs.gemini-model }}
         TARGET_BRANCHES: ${{ inputs.target-branches }}
         WAIT_FOR_CHECKS: ${{ inputs.wait-for-checks }}
         CHECKS_TIMEOUT: ${{ inputs.checks-timeout }}
@@ -118,7 +108,6 @@ runs:
         NOTIFY_ON_FAILURE: ${{ inputs.notify-on-failure }}
         GITHUB_TOKEN: ${{ github.token }}
         PR_TITLE: ${{ github.event.pull_request.title }}
-        PR_BODY: ${{ github.event.pull_request.body }}
         PR_URL: ${{ github.event.pull_request.html_url }}
         PR_AUTHOR: ${{ github.event.pull_request.user.login }}
         PR_BASE: ${{ github.event.pull_request.base.ref }}
@@ -383,34 +372,8 @@ runs:
           done
         }
 
-        # ---------- Descrição de 1 linha em PT (fallback = título) ----------
+        # ---------- Descrição = título do PR ----------
         DESC="$PR_TITLE"
-        if [ -n "${GEMINI_API_KEY:-}" ]; then
-          PROMPT=$(jq -n --arg title "$PR_TITLE" --arg body "${PR_BODY:-}" \
-            '"Com base no título e na descrição de um Pull Request, escreva UMA única linha curta em português (no máximo ~90 caracteres) do que o PR faz. " +
-             "Sem bullet, sem aspas, sem preâmbulo e SEM quebra de linha. Não invente o que não estiver no texto. Responda apenas a frase.\n\n" +
-             "TÍTULO: " + $title + "\n\nDESCRIÇÃO:\n" + (if ($body | length) > 1000 then ($body[0:1000] + " …") else $body end)')
-          # gemini-2.5-flash é modelo "thinking": os tokens de raciocínio contam
-          # dentro de maxOutputTokens. Com teto baixo, o thinking consumia o
-          # orçamento e a frase voltava cortada no meio (ex.: "...acessos do").
-          # thinkingBudget=0 desliga o raciocínio (desnecessário p/ 1 linha) e o
-          # teto maior dá folga.
-          request=$(jq -n --arg p "$PROMPT" \
-            '{ contents: [ { parts: [ { text: $p } ] } ], generationConfig: { maxOutputTokens: 512, temperature: 0.2, thinkingConfig: { thinkingBudget: 0 } } }')
-          http_code=$(curl -sS -o /tmp/gemini_resp.json -w "%{http_code}" \
-            "https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent" \
-            -H "x-goog-api-key: ${GEMINI_API_KEY}" -H "content-type: application/json" \
-            --data "$request" || echo "000")
-          if [ "$http_code" = "200" ]; then
-            G=$(jq -r '[.candidates[0]?.content?.parts[]?.text // empty] | join("")' /tmp/gemini_resp.json)
-            G=$(printf '%s' "$G" | tr '\n' ' ' | sed 's/  */ /g; s/^ *//; s/ *$//')
-            if [ -n "$G" ]; then DESC="$G"; else echo "::warning::Gemini vazio — usando título."; fi
-          else
-            echo "::warning::Gemini falhou (HTTP $http_code) — usando título."
-          fi
-        else
-          echo "::warning::gemini-api-key ausente — usando título como descrição."
-        fi
 
         # ---------- Autor: nome do perfil GitHub (fallback = login) ----------
         AUTHOR="$PR_AUTHOR"
