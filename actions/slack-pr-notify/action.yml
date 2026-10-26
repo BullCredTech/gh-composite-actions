@@ -84,7 +84,12 @@ inputs:
     required: false
     default: "60"
   notify-on-failure:
-    description: '"true" -> posta um card ❌ quando os checks falham. "false" (default) -> fica em silêncio na falha.'
+    description: >
+      "false" (default) -> PR ainda não anunciado só é postado depois que os
+      checks passam; com checks falhando fica em silêncio (o próximo push
+      re-tenta). PR já anunciado vira ❌ se um push novo quebrar a CI.
+      "true" -> no modo bot, posta logo em 🟠 "Aguardando checks" e edita pra
+      ❌ na falha; no modo webhook, posta um card vermelho na falha.
     required: false
     default: "false"
 
@@ -443,8 +448,112 @@ runs:
 
         WAIT="${WAIT_FOR_CHECKS:-true}"
 
+        # ---------- Helpers do modo bot token (card = mensagem editável) ----------
+        # find_card → seta TS/CH a partir do comentário oculto mais recente do PR.
+        find_card() {
+          TS=""; CH=""
+          [ -n "${PR_NUMBER:-}" ] || return 0
+          prev=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" --jq '.[].body' 2>/dev/null \
+            | grep -F "<!-- slack-pr-notify:" | tail -1 || true)
+          [ -n "$prev" ] || return 0
+          TS=$(printf '%s' "$prev" | sed -n 's/.*ts=\([0-9.]*\).*/\1/p')
+          CH=$(printf '%s' "$prev" | sed -n 's/.*channel=\([A-Za-z0-9]*\).*/\1/p')
+          [ -z "$CH" ] && CH="$CHANNEL_ID"
+          return 0
+        }
+
+        # post_card CARD LABEL → chat.postMessage e guarda ts+channel+autor+desc (base64)
+        # num comentário OCULTO do PR pros runs de review/merge/synchronize editarem
+        # depois. (Requer pull-requests: write.)
+        post_card() {
+          post=$(printf '%s' "$1" | jq --arg ch "$CHANNEL_ID" '. + {channel: $ch}')
+          slack_code=$(curl -sS -o /tmp/slack_resp.json -w "%{http_code}" \
+            -X POST -H "Authorization: Bearer ${SLACK_BOT_TOKEN}" \
+            -H 'Content-Type: application/json; charset=utf-8' \
+            --data "$post" https://slack.com/api/chat.postMessage)
+          ok=$(jq -r '.ok' /tmp/slack_resp.json 2>/dev/null || echo "false")
+          echo "chat.postMessage ($2) HTTP $slack_code ok=$ok"
+          if [ "$ok" != "true" ]; then
+            echo "::error::chat.postMessage falhou: $(cat /tmp/slack_resp.json)"; exit 1
+          fi
+          TS=$(jq -r '.ts' /tmp/slack_resp.json)
+          CH=$(jq -r '.channel' /tmp/slack_resp.json)
+          if [ -n "${PR_NUMBER:-}" ]; then
+            AUTHOR_B64=$(printf '%s' "$AUTHOR" | base64 | tr -d '\n')
+            DESC_B64=$(printf '%s' "$DESC" | base64 | tr -d '\n')
+            gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" \
+              -f body="<!-- slack-pr-notify: ts=${TS} channel=${CH} author=${AUTHOR_B64} desc=${DESC_B64} -->" >/dev/null 2>&1 \
+              || echo "::warning::não consegui guardar o ts no PR — edição posterior não vai funcionar."
+          fi
+        }
+
+        # update_card CARD LABEL → chat.update na mensagem TS/CH (falha não bloqueia).
+        update_card() {
+          upd=$(printf '%s' "$1" | jq --arg ch "$CH" --arg ts "$TS" '. + {channel: $ch, ts: $ts}')
+          code=$(curl -sS -o /tmp/slack_upd.json -w "%{http_code}" \
+            -X POST -H "Authorization: Bearer ${SLACK_BOT_TOKEN}" \
+            -H 'Content-Type: application/json; charset=utf-8' \
+            --data "$upd" https://slack.com/api/chat.update)
+          uok=$(jq -r '.ok' /tmp/slack_upd.json 2>/dev/null || echo "false")
+          echo "chat.update ($2) HTTP $code ok=$uok"
+          if [ "$uok" != "true" ]; then echo "::warning::chat.update falhou: $(cat /tmp/slack_upd.json)"; fi
+        }
+
+        # run_is_stale → 0 se o resultado deste run não deve mais ir pro card:
+        # - PR mergeado/fechado enquanto esperávamos os checks: o run do `closed` já
+        #   pôs 🟢/🔴, que é estado TERMINAL — não rebaixa;
+        # - head do PR mudou (push novo): o run do `synchronize` mais novo decide, e
+        #   este run não pode sobrescrever (nem anunciar) com o resultado de um SHA velho.
+        run_is_stale() {
+          [ -n "${PR_NUMBER:-}" ] || return 1
+          pr_now=$(curl -sS -H "Authorization: Bearer ${GITHUB_TOKEN}" -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${REPO}/pulls/${PR_NUMBER}" 2>/dev/null || echo '{}')
+          merged_now=$(printf '%s' "$pr_now" | jq -r '.merged // false')
+          state_now=$(printf '%s' "$pr_now" | jq -r '.state // ""')
+          head_now=$(printf '%s' "$pr_now" | jq -r '.head.sha // ""')
+          if [ "$merged_now" = "true" ] || [ "$state_now" = "closed" ]; then
+            echo "::notice::PR #${PR_NUMBER} já terminal (merged=$merged_now state=$state_now) — não mexe no card."
+            return 0
+          fi
+          if [ -n "$head_now" ] && [ "$head_now" != "$PR_HEAD_SHA" ]; then
+            echo "::notice::Head do PR #${PR_NUMBER} mudou (${PR_HEAD_SHA} -> ${head_now}) — o run do push novo decide."
+            return 0
+          fi
+          return 1
+        }
+
         if [ -n "${SLACK_BOT_TOKEN:-}" ] && [ -n "${CHANNEL_ID:-}" ]; then
           # ===== Modo bot token: posta e depois EDITA a mesma mensagem =====
+          # Se NÃO é a abertura (ex.: synchronize/reopened em novo push) e já existe
+          # uma mensagem (ts no comentário oculto), EDITA a existente em vez de
+          # postar nova — evita card duplicado a cada push.
+          TS=""; CH=""
+          if [ "${EVENT_ACTION:-}" != "opened" ]; then find_card; fi
+
+          # ---------- PR ainda não anunciado: só anuncia com a CI verde ----------
+          # Com wait-for-checks e notify-on-failure=false (default), o card só nasce
+          # DEPOIS que todos os checks passam: PR com CI quebrada não aparece no canal
+          # nem menciona o time. O próximo push (synchronize) re-roda a action e
+          # anuncia quando a CI passar. PR já anunciado segue o fluxo abaixo (vira ❌
+          # num push que quebra a CI) — o time já viu o card, apagar confundiria.
+          if [ -z "$TS" ] && [ "$WAIT" = "true" ] && [ "${NOTIFY_ON_FAILURE:-false}" != "true" ]; then
+            wait_checks
+            case "$CHECKS_RESULT" in
+              success|none) ;;
+              failure) echo "::notice::Checks falharam e o PR ainda não foi anunciado — não notifica (notify-on-failure=false)."; exit 0 ;;
+              *)       echo "::notice::Timeout aguardando checks — não notifica."; exit 0 ;;
+            esac
+            if run_is_stale; then exit 0; fi
+            # Outro run (ex.: reopened logo após o opened) pode ter anunciado enquanto
+            # esperávamos — ele é dono do card.
+            find_card
+            if [ -n "$TS" ]; then
+              echo "::notice::PR #${PR_NUMBER} já foi anunciado por outro run — nada a postar."; exit 0
+            fi
+            post_card "$(emit_card "🟡" "Aguardando review" "$BAR_COLOR")" "Aguardando review"
+            exit 0
+          fi
+
           # Estado inicial:
           if [ "$WAIT" = "true" ]; then
             IE="🟠"; IL="Aguardando checks"; IC="#d29922"
@@ -452,55 +561,11 @@ runs:
             IE="🟡"; IL="Aguardando review"; IC="$BAR_COLOR"
           fi
           card=$(emit_card "$IE" "$IL" "$IC")
-
-          # Se NÃO é a abertura (ex.: synchronize/reopened em novo push) e já existe
-          # uma mensagem (ts no comentário oculto), EDITA a existente em vez de
-          # postar nova — evita card duplicado a cada push e faz a mensagem voltar
-          # pra "Aguardando checks" enquanto a CI re-roda.
-          TS=""; CH=""
-          if [ "${EVENT_ACTION:-}" != "opened" ] && [ -n "${PR_NUMBER:-}" ]; then
-            prev=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" --jq '.[].body' 2>/dev/null \
-              | grep -F "<!-- slack-pr-notify:" | tail -1 || true)
-            if [ -n "$prev" ]; then
-              TS=$(printf '%s' "$prev" | sed -n 's/.*ts=\([0-9.]*\).*/\1/p')
-              CH=$(printf '%s' "$prev" | sed -n 's/.*channel=\([A-Za-z0-9]*\).*/\1/p')
-              [ -z "$CH" ] && CH="$CHANNEL_ID"
-            fi
-          fi
-
           if [ -n "$TS" ]; then
-            # edita a mensagem existente (re-push)
-            upd=$(printf '%s' "$card" | jq --arg ch "$CH" --arg ts "$TS" '. + {channel: $ch, ts: $ts}')
-            slack_code=$(curl -sS -o /tmp/slack_resp.json -w "%{http_code}" \
-              -X POST -H "Authorization: Bearer ${SLACK_BOT_TOKEN}" \
-              -H 'Content-Type: application/json; charset=utf-8' \
-              --data "$upd" https://slack.com/api/chat.update)
-            ok=$(jq -r '.ok' /tmp/slack_resp.json 2>/dev/null || echo "false")
-            echo "chat.update ($IL, re-push) HTTP $slack_code ok=$ok"
-            if [ "$ok" != "true" ]; then echo "::warning::chat.update falhou: $(cat /tmp/slack_resp.json)"; fi
+            # re-push: a mensagem volta pra "Aguardando checks" enquanto a CI re-roda
+            update_card "$card" "$IL, re-push"
           else
-            # posta mensagem nova e guarda o ts (abertura, ou anterior não achada)
-            post=$(printf '%s' "$card" | jq --arg ch "$CHANNEL_ID" '. + {channel: $ch}')
-            slack_code=$(curl -sS -o /tmp/slack_resp.json -w "%{http_code}" \
-              -X POST -H "Authorization: Bearer ${SLACK_BOT_TOKEN}" \
-              -H 'Content-Type: application/json; charset=utf-8' \
-              --data "$post" https://slack.com/api/chat.postMessage)
-            ok=$(jq -r '.ok' /tmp/slack_resp.json 2>/dev/null || echo "false")
-            echo "chat.postMessage ($IL) HTTP $slack_code ok=$ok"
-            if [ "$ok" != "true" ]; then
-              echo "::error::chat.postMessage falhou: $(cat /tmp/slack_resp.json)"; exit 1
-            fi
-            TS=$(jq -r '.ts' /tmp/slack_resp.json)
-            CH=$(jq -r '.channel' /tmp/slack_resp.json)
-            # Guarda ts+channel+autor+desc (base64) num comentário OCULTO do PR pros
-            # runs de review/merge/synchronize editarem depois. (Requer pull-requests: write.)
-            if [ -n "${PR_NUMBER:-}" ]; then
-              AUTHOR_B64=$(printf '%s' "$AUTHOR" | base64 | tr -d '\n')
-              DESC_B64=$(printf '%s' "$DESC" | base64 | tr -d '\n')
-              gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" \
-                -f body="<!-- slack-pr-notify: ts=${TS} channel=${CH} author=${AUTHOR_B64} desc=${DESC_B64} -->" >/dev/null 2>&1 \
-                || echo "::warning::não consegui guardar o ts no PR — edição posterior não vai funcionar."
-            fi
+            post_card "$card" "$IL"
           fi
 
           # Sem wait, o card já nasceu em "Aguardando review" — nada a editar depois.
@@ -513,28 +578,8 @@ runs:
             failure)      FE="❌"; FL="Checks falharam"; FC="#D64545" ;;
             *)            echo "::warning::timeout — card permanece em 'Aguardando checks'."; exit 0 ;;
           esac
-          # Trava de estado TERMINAL: se o PR foi mergeado/fechado enquanto
-          # esperávamos os checks (ex.: merge sem aguardar a CI), o run do evento
-          # `closed` já editou o card pra 🟢 Mergeado / 🔴 Fechado. NÃO rebaixa —
-          # 'Mergeado'/'Fechado' é final. Re-checa o estado real do PR antes de editar.
-          if [ -n "${PR_NUMBER:-}" ]; then
-            pr_now=$(curl -sS -H "Authorization: Bearer ${GITHUB_TOKEN}" -H "Accept: application/vnd.github+json" \
-              "https://api.github.com/repos/${REPO}/pulls/${PR_NUMBER}" 2>/dev/null || echo '{}')
-            merged_now=$(printf '%s' "$pr_now" | jq -r '.merged // false')
-            state_now=$(printf '%s' "$pr_now" | jq -r '.state // ""')
-            if [ "$merged_now" = "true" ] || [ "$state_now" = "closed" ]; then
-              echo "::notice::PR #${PR_NUMBER} já terminal (merged=$merged_now state=$state_now) — mantém o card e não rebaixa pós-checks."
-              exit 0
-            fi
-          fi
-          upd=$(emit_card "$FE" "$FL" "$FC" | jq --arg ch "$CH" --arg ts "$TS" '. + {channel: $ch, ts: $ts}')
-          code=$(curl -sS -o /tmp/slack_upd.json -w "%{http_code}" \
-            -X POST -H "Authorization: Bearer ${SLACK_BOT_TOKEN}" \
-            -H 'Content-Type: application/json; charset=utf-8' \
-            --data "$upd" https://slack.com/api/chat.update)
-          uok=$(jq -r '.ok' /tmp/slack_upd.json 2>/dev/null || echo "false")
-          echo "chat.update ($FL) HTTP $code ok=$uok"
-          if [ "$uok" != "true" ]; then echo "::warning::chat.update falhou: $(cat /tmp/slack_upd.json)"; fi
+          if run_is_stale; then exit 0; fi
+          update_card "$(emit_card "$FE" "$FL" "$FC")" "$FL"
           exit 0
         fi
 
