@@ -39,7 +39,7 @@ Lê os dados do PR do contexto `github.event.pull_request`, então o workflow qu
 | `checks-timeout` | não | `1800` | Tempo máximo (s) aguardando os checks. Estourou → sai sem notificar (falha fechada). |
 | `checks-poll-interval` | não | `30` | Intervalo (s) entre as checagens. |
 | `checks-initial-grace` | não | `60` | Janela (s) para os checks aparecerem. Se após esse tempo **nenhum** check existir, notifica (não há o que aguardar). |
-| `notify-on-failure` | não | `false` | `true` → posta um card ❌ quando os checks falham. `false` → silêncio na falha. |
+| `notify-on-failure` | não | `false` | `false` → PR ainda não anunciado só aparece no canal depois que os checks passam; com checks falhando fica em silêncio (o próximo push re-tenta). `true` → modo bot posta logo em 🟠 e edita pra ❌ na falha; modo webhook posta um card vermelho. |
 
 \* Precisa de **`slack-webhook-url` OU `slack-bot-token`**. Sem nenhum, a action não posta nada (não quebra).
 
@@ -56,7 +56,11 @@ Com `slack-bot-token` + `channel-id`, a action posta via `chat.postMessage` e gu
 | Mergeado | 🟢 `Pull Request · Mergeado · Author: …` | verde |
 | Fechado (sem merge) | 🔴 `Pull Request · Fechado · Author: …` | vermelha |
 
-Com `wait-for-checks: true` (default), o card abre em **🟠 Aguardando checks** e é editado pra 🟡 (checks ok) ou ❌ (checks falharam) quando a CI conclui. Com `false`, abre direto em 🟡.
+Com `wait-for-checks: true` e `notify-on-failure: false` (os defaults), o PR **só é anunciado quando a CI fica verde**: a action espera os checks e só então posta o card, já em 🟡 Aguardando review. Se os checks falham, nada é postado — o PR não aparece no canal nem menciona o time — e o próximo push (`synchronize`) tenta de novo. PR **já anunciado** que recebe um push volta pra 🟠 enquanto a CI re-roda e vira 🟡 ou ❌ conforme o resultado (o time já viu o card; apagar confundiria).
+
+Com `notify-on-failure: true`, o card abre em **🟠 Aguardando checks** e é editado pra 🟡 ou ❌ quando a CI conclui. Com `wait-for-checks: false`, abre direto em 🟡.
+
+Antes de postar/editar com o resultado dos checks, a action re-consulta o PR: se ele foi mergeado/fechado (🟢/🔴 é terminal) ou se o head mudou (push novo — o run mais novo decide), o run sai sem mexer no card. PR que nunca teve CI verde e é mergeado mesmo assim não aparece no canal (review/merge só editam card existente).
 
 Pra isso o caller precisa:
 
