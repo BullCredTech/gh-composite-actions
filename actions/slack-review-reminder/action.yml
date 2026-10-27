@@ -6,6 +6,8 @@ description: >
   slack-pr-notify) e, enquanto seguir sem review, re-cutuca a cada
   `reping-every-minutes` como RESPOSTA na thread (mencionando o time de novo).
   Para de cutucar assim que houver qualquer review, ou se o PR virar draft/fechar.
+  Só cutuca PR com a CI do head VERDE: check falhando ou ainda rodando -> pula
+  (precisa de checks: read + statuses: read; sem elas, cutuca sem checar a CI).
   Só age em horário comercial BRT (seg-sex, `business-hours-start`..`-end`),
   pulando fim de semana e feriado nacional (BrasilAPI). Estado (ts/última
   cutucada/contador) fica num comentário oculto do PR — por isso precisa de
@@ -46,6 +48,13 @@ inputs:
     description: Logins de autor a ignorar (vírgula/nova-linha). Default dependabot[bot].
     required: false
     default: "dependabot[bot]"
+  ignore-checks:
+    description: >
+      Nomes de check-runs (= nome do JOB) a ignorar na checagem da CI
+      (vírgula/nova-linha). Default cobre o merge gate org-wide, que falha DE
+      PROPÓSITO em fim de semana/feriado — mesmo default do slack-pr-notify.
+    required: false
+    default: gate,weekend-holiday-merge-gate
   business-hours-start:
     description: Hora inicial (BRT, 0-23) da janela em que cutuca. Default 9.
     required: false
@@ -69,6 +78,7 @@ runs:
         REMIND_AFTER_MINUTES: ${{ inputs.remind-after-minutes }}
         REPING_EVERY_MINUTES: ${{ inputs.reping-every-minutes }}
         IGNORE_AUTHORS: ${{ inputs.ignore-authors }}
+        IGNORE_CHECKS: ${{ inputs.ignore-checks }}
         BUSINESS_HOURS_START: ${{ inputs.business-hours-start }}
         BUSINESS_HOURS_END: ${{ inputs.business-hours-end }}
       with:
@@ -94,6 +104,7 @@ runs:
           const HEND = parseInt(process.env.BUSINESS_HOURS_END || '18', 10);
           const TARGETS = (process.env.TARGET_BRANCHES || 'main').split(/[,\n\r]+/).map(s => s.trim()).filter(Boolean);
           const IGNORE_AUTHORS = (process.env.IGNORE_AUTHORS || '').split(/[,\n\r]+/).map(s => s.trim()).filter(Boolean);
+          const IGNORE_CHECKS = (process.env.IGNORE_CHECKS || '').split(/[,\n\r]+/).map(s => s.trim()).filter(Boolean);
           const { owner, repo } = context.repo;
           const MARKER = '<!-- slack-review-reminder:';
 
@@ -176,6 +187,32 @@ runs:
             };
           };
 
+          // ---------- CI do head: green | pending | failing | unknown ----------
+          // Mesma regra do slack-pr-notify: check-runs (menos IGNORE_CHECKS) + commit
+          // statuses combinados. `unknown` = leitura negada (caller sem checks: read /
+          // statuses: read) -> fail-open: cutuca como antes, com warning uma vez só.
+          const FAILED = ['failure', 'cancelled', 'timed_out', 'action_required', 'stale'];
+          let ciWarned = false;
+          const headCi = async sha => {
+            try {
+              const runs = (await github.paginate(github.rest.checks.listForRef, { owner, repo, ref: sha, per_page: 100 }))
+                .filter(r => !IGNORE_CHECKS.includes(r.name));
+              const { data: st } = await github.rest.repos.getCombinedStatusForRef({ owner, repo, ref: sha });
+              const hasStatuses = st.total_count > 0;
+              if (runs.some(r => r.status === 'completed' && FAILED.includes(r.conclusion))) return 'failing';
+              if (hasStatuses && ['failure', 'error'].includes(st.state)) return 'failing';
+              if (runs.some(r => r.status !== 'completed')) return 'pending';
+              if (hasStatuses && st.state === 'pending') return 'pending';
+              return 'green';
+            } catch (e) {
+              if (!ciWarned) {
+                core.warning(`CI não lida (${e.status || e.message}) — cutucando sem checar a CI. Adicione 'checks: read' e 'statuses: read' em permissions no workflow.`);
+                ciWarned = true;
+              }
+              return 'unknown';
+            }
+          };
+
           // ---------- varre PRs abertos ----------
           const prs = await github.paginate(github.rest.pulls.list, { owner, repo, state: 'open', per_page: 100 });
           const nowSec = Math.floor(Date.now() / 1000);
@@ -196,6 +233,15 @@ runs:
 
             const ageMin = (Date.now() - createdAt) / 60000;
             if (ageMin < REMIND_MIN) { skipped++; continue; }
+
+            // PR com CI vermelha (ou ainda rodando) não está pronto pra review: não
+            // cutuca — nem cai no card próprio, já que o slack-pr-notify não anuncia
+            // PR com checks falhando. Volta a ser elegível quando a CI ficar verde.
+            const ci = await headCi(pr.head.sha);
+            if (ci === 'failing' || ci === 'pending') {
+              core.info(`PR #${pr.number}: CI ${ci} no ${pr.head.sha.slice(0, 7)} — não cutuca.`);
+              skipped++; continue;
+            }
 
             // comentários do PR: estado do lembrete + card original do pr-notify
             const comments = await github.paginate(github.rest.issues.listComments, { owner, repo, issue_number: pr.number, per_page: 100 });

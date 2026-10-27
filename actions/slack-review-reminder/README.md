@@ -29,6 +29,7 @@ Só em **horário comercial BRT**, seg–sex, dentro de `business-hours-start`..
 - PR de sync `main → staging` (bull-sync-bot)
 - PR que **já tem qualquer review** (aprovado / mudanças pedidas / comentado)
 - PR aberto há menos de `remind-after-minutes`
+- PR com **CI do head vermelha ou ainda rodando** (check-runs fora de `ignore-checks` + commit statuses — mesma regra do `slack-pr-notify`). Volta a ser elegível quando a CI fica verde. Sem `checks: read`/`statuses: read` no caller, a CI não é lida e o lembrete segue como antes (fail-open, com warning no log).
 - PR aberto **antes de 26/07/2026** — corte de adoção, chumbado na action (ver abaixo)
 
 ## Inputs
@@ -43,6 +44,7 @@ Só em **horário comercial BRT**, seg–sex, dentro de `business-hours-start`..
 | `remind-after-minutes` | não | `30` | Minutos sem review antes do 1º lembrete. |
 | `reping-every-minutes` | não | `60` | Intervalo entre re-cutucadas. |
 | `ignore-authors` | não | `dependabot[bot]` | Logins a ignorar (vírgula/nova-linha). |
+| `ignore-checks` | não | `gate,weekend-holiday-merge-gate` | Check-runs (nome do **job**) ignorados na checagem da CI — o merge gate org-wide falha de propósito. |
 | `business-hours-start` | não | `9` | Hora inicial (BRT, inclusiva). |
 | `business-hours-end` | não | `18` | Hora final (BRT, **exclusiva** — cutuca até 17h59). |
 
@@ -50,7 +52,7 @@ Só em **horário comercial BRT**, seg–sex, dentro de `business-hours-start`..
 
 ## Estado
 
-Guarda última cutucada + contador num **comentário oculto do PR** (`<!-- slack-review-reminder: ... -->`) — por isso o caller precisa de `pull-requests: write`. O `ts`/canal do card a encaminhar vêm do comentário do `slack-pr-notify`. Usa o `GITHUB_TOKEN` do próprio repo (varre só os PRs dele), então **não precisa de token cross-repo**: é um workflow por repo.
+Guarda última cutucada + contador num **comentário oculto do PR** (`<!-- slack-review-reminder: ... -->`) — por isso o caller precisa de `pull-requests: write` (além de `checks: read` + `statuses: read` pra ler a CI). O `ts`/canal do card a encaminhar vêm do comentário do `slack-pr-notify`. Usa o `GITHUB_TOKEN` do próprio repo (varre só os PRs dele), então **não precisa de token cross-repo**: é um workflow por repo.
 
 ## Uso (caller)
 
@@ -62,6 +64,8 @@ on:
   workflow_dispatch:               # roda manual pra testar
 permissions:
   contents: read
+  checks: read                     # só cutuca PR com a CI verde
+  statuses: read
   pull-requests: write             # guardar/atualizar o estado no comentário oculto
 jobs:
   remind:
