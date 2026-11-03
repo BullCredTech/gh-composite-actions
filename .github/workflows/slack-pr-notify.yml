@@ -33,7 +33,7 @@ jobs:
     if: github.actor != 'dependabot[bot]'
     runs-on: ubuntu-latest
     steps:
-      - uses: BullCredTech/gh-composite-actions/actions/slack-pr-notify@main
+      - uses: BullCredTech/gh-composite-actions/actions/slack-pr-notify@3cdb98ddcecf1ac5c84bb49a6136c894dbd58bbf # 
         with:
           slack-bot-token: ${{ secrets.SLACK_BOT_TOKEN }}
           channel-id: ${{ secrets.SLACK_PR_CHANNEL_ID }}
