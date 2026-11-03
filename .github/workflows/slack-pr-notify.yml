@@ -1,0 +1,40 @@
+name: Notify Slack on PR (open / approved / merged)
+
+# Notificação de PR no Slack via a própria composite action deste repo.
+# Formato e lógica vivem em actions/slack-pr-notify.
+# Modo bot token: posta na abertura e EDITA a MESMA mensagem em cada transição:
+# 🟠 Aguardando checks → 🔵 Aguardando review / ❌ Checks falharam
+# → 🟡 Aprovado (Aguardando merge) → 🟢 Mergeado / 🔴 Fechado (sem merge).
+# PR em draft NÃO notifica: o card nasce no `ready_for_review`.
+# Guarda o ts num comentário oculto do PR (por isso pull-requests: write).
+# Org secrets: SLACK_BOT_TOKEN, SLACK_PR_CHANNEL_ID.
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, closed, ready_for_review]
+    branches: [main]
+  pull_request_review:
+    types: [submitted]
+
+# Push novo no PR cancela o run que ainda esperava pelos checks do commit
+# anterior. O grupo inclui o evento para um review não cancelar o run do push.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  checks: read
+  statuses: read
+  pull-requests: write
+
+jobs:
+  notify:
+    if: github.actor != 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: BullCredTech/gh-composite-actions/actions/slack-pr-notify@main
+        with:
+          slack-bot-token: ${{ secrets.SLACK_BOT_TOKEN }}
+          channel-id: ${{ secrets.SLACK_PR_CHANNEL_ID }}
+          team-id: S0AT79KD1PC # backend-team
