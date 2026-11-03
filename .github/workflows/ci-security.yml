@@ -1,0 +1,77 @@
+name: 'CI: Security'
+
+# Os 4 jobs são required checks do ruleset da org "Protect main branch"
+# (id 16643694), que exige estes nomes exatos. Sem eles o PR fica BLOCKED para
+# sempre: o check nunca reporta, mesmo com review aprovado. Manter os nomes
+# alinhados com os outros repos da org (bull-module-proposals, bull-api-docs-gitbook).
+#
+# Gatilho SEM `paths:` de propósito: workflow pulado por path deixa o check
+# Pending e trava o merge.
+#
+# Este repo só tem composite actions (YAML + shell), sem manifesto de
+# dependência. Por isso:
+#   - gitleaks: roda de verdade.
+#   - semgrep: roda de verdade (tem regras de GitHub Actions, ex.: injeção via
+#     expressão em `run:`).
+#   - trivy + license: sucesso trivial, só para satisfazer o ruleset.
+on:
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  gitleaks:
+    name: 'Gitleaks (secrets in commits)'
+    runs-on: ubuntu-latest
+    env:
+      GITLEAKS_VERSION: '8.30.1'
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Install gitleaks
+        run: |
+          set -euo pipefail
+          curl -fsSL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
+            -o gitleaks.tar.gz
+          tar -xzf gitleaks.tar.gz gitleaks
+          chmod +x gitleaks
+          sudo mv gitleaks /usr/local/bin/gitleaks
+          gitleaks version
+      # `--log-opts=HEAD`: varre só o histórico alcançável pelo commit testado,
+      # não todas as branches que o `fetch-depth: 0` traz.
+      - name: Run gitleaks
+        run: gitleaks detect --source=. --redact --verbose --exit-code=1 --log-opts=HEAD
+
+  semgrep:
+    name: 'Semgrep (SAST)'
+    runs-on: ubuntu-latest
+    container:
+      image: semgrep/semgrep:1.162.0
+    steps:
+      # fetch-depth: 0 para o `semgrep ci` achar a base e reprovar só achado
+      # NOVO do PR (diff-aware).
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+      - run: semgrep ci --config=auto --no-suppress-errors
+
+  trivy-fs:
+    name: 'Trivy (filesystem deps scan)'
+    runs-on: ubuntu-latest
+    # Trivial: repo sem manifesto de dependência. Existe para satisfazer o ruleset.
+    steps:
+      - run: echo "Repo de composite actions, sem dependências para escanear."
+
+  license-check:
+    name: 'License check (allowlist)'
+    runs-on: ubuntu-latest
+    # Trivial: repo sem manifesto de dependência. Existe para satisfazer o ruleset.
+    steps:
+      - run: echo "Repo de composite actions, sem dependências para checar licença."
