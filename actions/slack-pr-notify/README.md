@@ -40,6 +40,7 @@ Lê os dados do PR do contexto `github.event.pull_request`, então o workflow qu
 | `checks-poll-interval` | não | `30` | Intervalo (s) entre as checagens. |
 | `checks-initial-grace` | não | `60` | Janela (s) para os checks aparecerem. Se após esse tempo **nenhum** check existir, notifica (não há o que aguardar). |
 | `notify-on-failure` | não | `false` | `false` → PR ainda não anunciado só aparece no canal depois que os checks passam; com checks falhando fica em silêncio (o próximo push re-tenta). `true` → modo bot posta logo em 🟠 e edita pra ❌ na falha; modo webhook posta um card vermelho. |
+| `trigger-mode` | não | `poll` | `poll` → o run fica vivo consultando os checks até eles terminarem (cobra minutos durante a espera). `event` → olha os checks uma vez e sai; quem acorda a action quando um CI termina é o `workflow_run` do caller. Exige `slack-bot-token`. Ver [Modo event](#modo-event--não-espera-os-checks). |
 
 \* Precisa de **`slack-webhook-url` OU `slack-bot-token`**. Sem nenhum, a action não posta nada (não quebra).
 
@@ -94,6 +95,63 @@ jobs:
 
 > Sem `slack-bot-token`, tudo segue igual ao webhook (sem edição no merge) — retrocompatível.
 
+### Modo event — não espera os checks
+
+Com `trigger-mode: event`, nenhum run fica parado esperando a CI. Cada run olha os checks do commit **uma vez**:
+
+- **Algum check ainda rodando** (ou nenhum check criado ainda): sai na hora. O próximo workflow que terminar acorda a action de novo.
+- **Todos terminaram**: posta o card em 🟡 (ou edita pra 🟡/❌, se o PR já foi anunciado), com as mesmas regras do modo `poll`.
+
+Quem acorda a action quando um check termina é o evento `workflow_run` no caller, com **os workflows de CI do repo listados pelo nome**. O evento só dispara com o workflow já na `main`.
+
+```yaml
+name: Notify Slack on PR
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, closed, ready_for_review]
+    branches: [main]
+  pull_request_review:
+    types: [submitted]
+  workflow_run:
+    workflows: ["CI", "Security scans"]   # todos os workflows de checks do repo
+    types: [completed]
+
+# Avaliação dos checks (push no PR + CI terminando) roda uma por vez por commit:
+# dois CIs terminando juntos não postam o card duas vezes. Review e closed só
+# editam o card e ficam fora da fila (grupo próprio).
+concurrency:
+  group: slack-pr-notify-${{ (github.event_name == 'workflow_run' && github.event.workflow_run.head_sha) || (github.event_name == 'pull_request' && github.event.action != 'closed' && github.event.pull_request.head.sha) || github.run_id }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  checks: read
+  statuses: read
+  pull-requests: write
+
+jobs:
+  notify:
+    # workflow_run de push na main, de CI cancelado ou de PR de fork (roda com os secrets): pula antes de subir o runner.
+    if: >-
+      github.actor != 'dependabot[bot]' &&
+      (github.event_name != 'workflow_run' ||
+       (github.event.workflow_run.event == 'pull_request' && github.event.workflow_run.conclusion != 'cancelled' &&
+        github.event.workflow_run.head_repository.full_name == github.repository))
+    runs-on: ubuntu-latest
+    steps:
+      - uses: BullCredTech/gh-composite-actions/actions/slack-pr-notify@<sha>
+        with:
+          slack-bot-token: ${{ secrets.SLACK_BOT_TOKEN }}
+          channel-id: C0XXXXXXX
+          trigger-mode: event
+```
+
+Limites do modo event:
+
+- **Workflow fora da lista não acorda a action.** Se ele (ou um check de fora do Actions, como o `org-security` da org) for o último a terminar, o card só é decidido no próximo evento do PR. Liste todos os workflows de checks do repo e revise a lista ao criar um novo.
+- **Repo sem nenhum workflow de checks** nunca anuncia o PR: use `trigger-mode: poll`.
+- **Só funciona com bot token**: no modo webhook não há card editável pra saber se outro run já postou.
+
 ## Uso
 
 ```yaml
@@ -122,7 +180,7 @@ jobs:
 
 - **Filtro de branch**: só notifica PRs cuja **base** (`github.event.pull_request.base.ref`) esteja em `target-branches` (default `main`). Isso evita ruído de PRs entre branches de trabalho.
 - **Espera de checks** (`wait-for-checks: true`): o job faz *poll* dos endpoints `commits/{sha}/check-runs` e `commits/{sha}/status`. Ignora os check runs do **próprio** workflow run (identificados pelo `details_url` que contém `/actions/runs/<RUN_ID>/`), evitando esperar por si mesmo. Só posta quando não há nenhum check pendente **nem** com falha.
-  - **Enquanto espera, o runner fica ativo** consumindo minutos de Actions (até `checks-timeout`). Ajuste `checks-poll-interval`/`checks-timeout` conforme a duração típica da sua CI.
+  - **Enquanto espera, o runner fica ativo** consumindo minutos de Actions (até `checks-timeout`). Para não pagar a espera, use `trigger-mode: event`.
   - **Timeout**: se estourar `checks-timeout` com checks ainda pendentes, **não notifica** (falha fechada) — melhor não anunciar "verde" sem confirmar.
   - **Sem checks**: se após `checks-initial-grace` não existir nenhum check para o commit, notifica assim mesmo (não há o que aguardar).
   - **Permissões**: requer `checks: read` e `statuses: read` no caller (além de `contents: read`).
