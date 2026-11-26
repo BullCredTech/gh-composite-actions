@@ -15,12 +15,20 @@ on:
     branches: [main]
   pull_request_review:
     types: [submitted]
+  # trigger-mode: event: a action não espera a CI dentro do runner (cobrava a espera
+  # inteira). Quem acorda a action quando um check termina é este evento.
+  # Liste aqui TODOS os workflows que rodam em PR: um workflow fora da lista não
+  # acorda a action, e se ele for o último a terminar o card fica parado.
+  workflow_run:
+    workflows: ["CI: Security"]
+    types: [completed]
 
-# Push novo no PR cancela o run que ainda esperava pelos checks do commit
-# anterior. O grupo inclui o evento para um review não cancelar o run do push.
+# Avaliação dos checks (push no PR + CI terminando) roda uma por vez por commit, para
+# dois CIs terminando juntos não postarem o card duas vezes. Review e closed só editam
+# o card e ficam fora da fila (grupo próprio).
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
+  group: slack-pr-notify-${{ (github.event_name == 'workflow_run' && github.event.workflow_run.head_sha) || (github.event_name == 'pull_request' && github.event.action != 'closed' && github.event.pull_request.head.sha) || github.run_id }}
+  cancel-in-progress: false
 
 permissions:
   contents: read
@@ -30,11 +38,19 @@ permissions:
 
 jobs:
   notify:
-    if: github.actor != 'dependabot[bot]'
+    # workflow_run de push na main, de CI cancelado, de PR de fork (roda com os secrets) ou
+    # do Dependabot: pula antes de subir o runner.
+    if: >-
+      github.actor != 'dependabot[bot]' &&
+      (github.event_name != 'workflow_run' ||
+       (github.event.workflow_run.event == 'pull_request' && github.event.workflow_run.conclusion != 'cancelled' &&
+        github.event.workflow_run.head_repository.full_name == github.repository &&
+        github.event.workflow_run.actor.login != 'dependabot[bot]'))
     runs-on: ubuntu-latest
     steps:
-      - uses: BullCredTech/gh-composite-actions/actions/slack-pr-notify@3cdb98ddcecf1ac5c84bb49a6136c894dbd58bbf # main (v1.20.0 + user-map do #34)
+      - uses: BullCredTech/gh-composite-actions/actions/slack-pr-notify@a2a1d9ea2396ae8fa59033f5052cc00c0587f5d7 # gh-composite-actions#37 (trigger-mode event)
         with:
+          trigger-mode: event
           slack-bot-token: ${{ secrets.SLACK_BOT_TOKEN }}
           channel-id: ${{ secrets.SLACK_PR_CHANNEL_ID }}
           team-id: S0AT79KD1PC # backend-team
