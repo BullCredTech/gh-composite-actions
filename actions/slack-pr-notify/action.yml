@@ -92,6 +92,19 @@ inputs:
       ❌ na falha; no modo webhook, posta um card vermelho na falha.
     required: false
     default: "false"
+  trigger-mode:
+    description: >
+      Como a action descobre que os checks terminaram.
+      "poll" (default) -> o run fica vivo consultando os checks a cada
+      checks-poll-interval, até checks-timeout. O runner cobra minutos durante
+      toda a espera.
+      "event" -> não espera: olha os checks UMA vez e sai. Quem acorda a action
+      quando um check termina é o evento `workflow_run` (types: [completed]) no
+      workflow chamador, listando os workflows de CI do repo. Cada run dura
+      segundos. Com checks ainda rodando, sai e o próximo workflow que terminar
+      decide.
+    required: false
+    default: poll
 
 runs:
   using: "composite"
@@ -111,6 +124,10 @@ runs:
         CHECKS_POLL_INTERVAL: ${{ inputs.checks-poll-interval }}
         CHECKS_INITIAL_GRACE: ${{ inputs.checks-initial-grace }}
         NOTIFY_ON_FAILURE: ${{ inputs.notify-on-failure }}
+        TRIGGER_MODE: ${{ inputs.trigger-mode }}
+        WR_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        WR_EVENT: ${{ github.event.workflow_run.event }}
+        WR_PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
         GITHUB_TOKEN: ${{ github.token }}
         PR_TITLE: ${{ github.event.pull_request.title }}
         PR_URL: ${{ github.event.pull_request.html_url }}
@@ -127,6 +144,43 @@ runs:
         USER_MAP: ${{ github.action_path }}/user-map.json
       run: |
         set -euo pipefail
+
+        EVENT_MODE="false"
+        [ "${TRIGGER_MODE:-poll}" = "event" ] && EVENT_MODE="true"
+
+        # ===== WORKFLOW_RUN (trigger-mode: event): um workflow de CI terminou =====
+        # O evento não traz o PR em github.event.pull_request: acha o PR pelo SHA e
+        # preenche as mesmas variáveis que o evento pull_request preencheria. Daqui
+        # pra baixo o fluxo é o mesmo (com EVENT_ACTION=ci_completed, que procura o
+        # card existente em vez de tratar como abertura).
+        if [ "${EVENT_NAME:-}" = "workflow_run" ]; then
+          if [ "${WR_EVENT:-}" != "pull_request" ]; then
+            echo "::notice::workflow_run veio de '${WR_EVENT:-}', não de PR — nada a fazer."; exit 0
+          fi
+          PR_NUMBER="${WR_PR_NUMBER:-}"
+          if [ -z "$PR_NUMBER" ]; then
+            PR_NUMBER=$(gh api "repos/${REPO}/commits/${WR_HEAD_SHA}/pulls" \
+              --jq '[.[] | select(.state == "open")][0].number // empty' 2>/dev/null || true)
+          fi
+          if [ -z "$PR_NUMBER" ]; then
+            echo "::notice::Nenhum PR aberto com head ${WR_HEAD_SHA} — nada a fazer."; exit 0
+          fi
+          pr=$(gh api "repos/${REPO}/pulls/${PR_NUMBER}" 2>/dev/null || echo '{}')
+          if [ "$(printf '%s' "$pr" | jq -r '.state // ""')" != "open" ]; then
+            echo "::notice::PR #${PR_NUMBER} não está aberto — o card já é terminal."; exit 0
+          fi
+          PR_HEAD_SHA=$(printf '%s' "$pr" | jq -r '.head.sha // ""')
+          if [ "$PR_HEAD_SHA" != "$WR_HEAD_SHA" ]; then
+            echo "::notice::Head do PR #${PR_NUMBER} mudou (${WR_HEAD_SHA} -> ${PR_HEAD_SHA}) — o run do push novo decide."; exit 0
+          fi
+          PR_TITLE=$(printf '%s' "$pr" | jq -r '.title // ""')
+          PR_URL=$(printf '%s' "$pr" | jq -r '.html_url // ""')
+          PR_AUTHOR=$(printf '%s' "$pr" | jq -r '.user.login // ""')
+          PR_BASE=$(printf '%s' "$pr" | jq -r '.base.ref // ""')
+          PR_DRAFT=$(printf '%s' "$pr" | jq -r '.draft // false')
+          PR_MERGED="false"
+          EVENT_ACTION="ci_completed"
+        fi
 
         # ===== APPROVED: review aprovado -> edita a mensagem pra "aprovado, aguardando merge" =====
         if [ "${EVENT_NAME:-}" = "pull_request_review" ]; then
@@ -292,7 +346,14 @@ runs:
         # até tudo concluir. Só segue se todos passaram.
         # Vira função (seta CHECKS_RESULT = success|none|failure|timeout, sem sair)
         # pra rodar DEPOIS de já ter postado o card "Aguardando checks".
+        # trigger-mode=event: olha UMA vez e devolve "pending" se algo ainda roda (ou
+        # se nenhum check apareceu ainda): o workflow_run do próximo CI que terminar
+        # decide. Nesse modo também ignora os check-runs dos outros runs desta
+        # notificação (mesmo nome de job), senão um run de review rodando junto
+        # contaria como check pendente e ninguém decidiria depois.
         CHECKS_RESULT=""
+        SELF_JOB=""
+        [ "$EVENT_MODE" = "true" ] && SELF_JOB="${GITHUB_JOB:-}"
         wait_checks() {
           api="https://api.github.com/repos/${REPO}"
           sha="${PR_HEAD_SHA}"
@@ -315,9 +376,11 @@ runs:
               filtered=$(printf '%s' "$resp" | jq -c \
                 --arg rid "/actions/runs/${GITHUB_RUN_ID}/" \
                 --arg ign "${IGNORE_CHECKS:-}" \
+                --arg self "$SELF_JOB" \
                 '($ign | gsub("[,\r]"; "\n") | split("\n") | map(gsub("^\\s+|\\s+$"; "")) | map(select(length > 0))) as $ignore |
                  [(.check_runs // [])[]
                    | select(((.details_url // "") | contains($rid)) | not)
+                   | select($self == "" or (.name // "") != $self)
                    | select((.name // "") as $n | ($ignore | index($n) | not))]')
               p=$(printf '%s' "$filtered" | jq -r '[.[] | select(.status != "completed")] | length')
               f=$(printf '%s' "$filtered" | jq -r '[.[] | select(.status == "completed") | (.conclusion // "") as $c | select($c=="failure" or $c=="cancelled" or $c=="timed_out" or $c=="action_required" or $c=="stale")] | length')
@@ -350,6 +413,10 @@ runs:
             # senão um check que falha rápido, ou um "gate" latchado, viraria ❌
             # prematuro enquanto os outros ainda rodam.)
             total_checks=$(( considered_runs + st_total ))
+            if [ "$EVENT_MODE" = "true" ] && { [ "$total_checks" -eq 0 ] || [ "$pending_runs" -gt 0 ] || [ "$status_pending" = "true" ]; }; then
+              echo "::notice::Checks ainda rodando (pendentes: check-runs=$pending_runs, status='$st_state', total=$total_checks) — o próximo workflow que terminar decide."
+              CHECKS_RESULT="pending"; return
+            fi
             if [ "$total_checks" -eq 0 ]; then
               # nenhum check ainda — aguarda aparecerem até a grace inicial
               [ -z "$first_seen" ] && first_seen="$now"
@@ -540,6 +607,7 @@ runs:
             wait_checks
             case "$CHECKS_RESULT" in
               success|none) ;;
+              pending) exit 0 ;;
               failure) echo "::notice::Checks falharam e o PR ainda não foi anunciado — não notifica (notify-on-failure=false)."; exit 0 ;;
               *)       echo "::notice::Timeout aguardando checks — não notifica."; exit 0 ;;
             esac
@@ -551,6 +619,26 @@ runs:
               echo "::notice::PR #${PR_NUMBER} já foi anunciado por outro run — nada a postar."; exit 0
             fi
             post_card "$(emit_card "🟡" "Aguardando review" "$BAR_COLOR")" "Aguardando review"
+            exit 0
+          fi
+
+          # ---------- trigger-mode=event, um CI terminou: só decide, não volta pra 🟠 ----------
+          # O 🟠 do re-push já foi posto pelo run do `synchronize`. Aqui o run só
+          # aplica o resultado final quando nada mais está rodando.
+          if [ "$EVENT_MODE" = "true" ] && [ "${EVENT_NAME:-}" = "workflow_run" ]; then
+            wait_checks
+            case "$CHECKS_RESULT" in
+              success|none) FE="🟡"; FL="Aguardando review"; FC="$BAR_COLOR" ;;
+              failure)      FE="❌"; FL="Checks falharam"; FC="#D64545" ;;
+              *)            exit 0 ;;
+            esac
+            if run_is_stale; then exit 0; fi
+            [ -n "$TS" ] || find_card
+            if [ -n "$TS" ]; then
+              update_card "$(emit_card "$FE" "$FL" "$FC")" "$FL"
+            else
+              post_card "$(emit_card "$FE" "$FL" "$FC")" "$FL"
+            fi
             exit 0
           fi
 
@@ -576,6 +664,7 @@ runs:
           case "$CHECKS_RESULT" in
             success|none) FE="🟡"; FL="Aguardando review"; FC="$BAR_COLOR" ;;
             failure)      FE="❌"; FL="Checks falharam"; FC="#D64545" ;;
+            pending)      exit 0 ;;
             *)            echo "::warning::timeout — card permanece em 'Aguardando checks'."; exit 0 ;;
           esac
           if run_is_stale; then exit 0; fi
@@ -584,6 +673,11 @@ runs:
         fi
 
         # ===== Modo webhook (legado): espera checks e posta 1x (sem edição) =====
+        # Sem card editável não dá pra saber se outro run já postou: no modo event
+        # cada CI que terminasse postaria de novo. Exige bot token.
+        if [ "$EVENT_MODE" = "true" ]; then
+          echo "::warning::trigger-mode=event exige slack-bot-token + channel-id — não notifica."; exit 0
+        fi
         E="🟡"; L="Aguardando review"; C="$BAR_COLOR"
         if [ "$WAIT" = "true" ]; then
           wait_checks
