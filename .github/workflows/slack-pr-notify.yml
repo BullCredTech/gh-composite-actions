@@ -48,7 +48,7 @@ jobs:
         github.event.workflow_run.actor.login != 'dependabot[bot]'))
     runs-on: ubuntu-latest
     steps:
-      - uses: BullCredTech/gh-composite-actions/actions/slack-pr-notify@a2a1d9ea2396ae8fa59033f5052cc00c0587f5d7 # gh-composite-actions#37 (trigger-mode event)
+      - uses: BullCredTech/gh-composite-actions/actions/slack-pr-notify@6f8560a80c94cdc129677a2bfd80f5a7e5f0b9ce # main, gh-composite-actions#37 (trigger-mode event)
         with:
           trigger-mode: event
           slack-bot-token: ${{ secrets.SLACK_BOT_TOKEN }}
