@@ -131,11 +131,12 @@ permissions:
 
 jobs:
   notify:
-    # workflow_run de push na main ou de CI cancelado: pula antes de subir o runner (custo zero).
+    # workflow_run de push na main, de CI cancelado ou de PR de fork (roda com os secrets): pula antes de subir o runner.
     if: >-
       github.actor != 'dependabot[bot]' &&
       (github.event_name != 'workflow_run' ||
-       (github.event.workflow_run.event == 'pull_request' && github.event.workflow_run.conclusion != 'cancelled'))
+       (github.event.workflow_run.event == 'pull_request' && github.event.workflow_run.conclusion != 'cancelled' &&
+        github.event.workflow_run.head_repository.full_name == github.repository))
     runs-on: ubuntu-latest
     steps:
       - uses: BullCredTech/gh-composite-actions/actions/slack-pr-notify@<sha>

@@ -127,6 +127,7 @@ runs:
         TRIGGER_MODE: ${{ inputs.trigger-mode }}
         WR_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
         WR_EVENT: ${{ github.event.workflow_run.event }}
+        WR_HEAD_REPO: ${{ github.event.workflow_run.head_repository.full_name }}
         WR_PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
         GITHUB_TOKEN: ${{ github.token }}
         PR_TITLE: ${{ github.event.pull_request.title }}
@@ -156,6 +157,11 @@ runs:
         if [ "${EVENT_NAME:-}" = "workflow_run" ]; then
           if [ "${WR_EVENT:-}" != "pull_request" ]; then
             echo "::notice::workflow_run veio de '${WR_EVENT:-}', não de PR — nada a fazer."; exit 0
+          fi
+          # workflow_run roda com os secrets do repo base. PR de fork traria título,
+          # comentários e SHA controlados por quem não é da org: não processa.
+          if [ "${WR_HEAD_REPO:-}" != "$REPO" ]; then
+            echo "::notice::PR vem de outro repositório (${WR_HEAD_REPO:-?}) — não notifica no modo event."; exit 0
           fi
           PR_NUMBER="${WR_PR_NUMBER:-}"
           if [ -z "$PR_NUMBER" ]; then
@@ -520,7 +526,10 @@ runs:
         find_card() {
           TS=""; CH=""
           [ -n "${PR_NUMBER:-}" ] || return 0
-          prev=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" --jq '.[].body' 2>/dev/null \
+          # Só vale o comentário escrito pelo github.token (github-actions[bot]): um
+          # comentário com o mesmo marcador escrito por outra pessoa não aponta o card.
+          prev=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" \
+            --jq '.[] | select(.user.login == "github-actions[bot]") | .body' 2>/dev/null \
             | grep -F "<!-- slack-pr-notify:" | tail -1 || true)
           [ -n "$prev" ] || return 0
           TS=$(printf '%s' "$prev" | sed -n 's/.*ts=\([0-9.]*\).*/\1/p')
