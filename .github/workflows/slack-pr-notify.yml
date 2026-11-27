@@ -20,7 +20,7 @@ on:
   # Liste aqui TODOS os workflows que rodam em PR: um workflow fora da lista não
   # acorda a action, e se ele for o último a terminar o card fica parado.
   workflow_run:
-    workflows: ["CI: Security"]
+    workflows: ["org-security"]
     types: [completed]
 
 # Avaliação dos checks (push no PR + CI terminando) roda uma por vez por commit, para
